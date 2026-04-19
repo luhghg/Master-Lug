@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python -c \"from cryptography.fernet import Fernet; print\\(Fernet.generate_key\\(\\).decode\\(\\)\\)\")",
+      "Bash(docker --version)",
+      "Bash(docker info *)",
+      "Bash(docker compose *)",
+      "Bash(python generate_sql.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python generate_sql.py)",
+      "Bash(Get-Content schema.sql)",
+      "Bash(PYTHONIOENCODING=utf-8 python register_bot.py)"
+    ]
+  }
+}
