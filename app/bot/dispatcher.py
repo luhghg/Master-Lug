@@ -16,6 +16,8 @@ from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 from aiogram.types import Update
 
 from app.bot.handlers import employer, start, worker
+from app.bot.handlers.niche.beauty import admin as beauty_admin
+from app.bot.handlers.niche.beauty import client as beauty_client
 from app.bot.middlewares.block_check import BlockCheckMiddleware
 from app.bot.middlewares.db_session import DBSessionMiddleware
 from app.bot.middlewares.rate_limit import RateLimitMiddleware
@@ -53,6 +55,8 @@ async def _get_dispatcher() -> Dispatcher:
     start.register(dp)
     employer.register(dp)
     worker.register(dp)
+    beauty_client.register(dp)
+    beauty_admin.register(dp)
 
     _dispatcher = dp
     logger.info("Shared Dispatcher initialized.")
@@ -74,6 +78,7 @@ async def process_update(
     registered_bot_id: int,
     bot_username: str,
     owner_telegram_id: int,
+    bot_niche: str,
     update_data: dict,
 ) -> None:
     """
@@ -90,6 +95,7 @@ async def process_update(
             registered_bot_id=registered_bot_id,
             bot_username=bot_username,
             owner_telegram_id=owner_telegram_id,
+            bot_niche=bot_niche,
         )
     except Exception:
         logger.exception(

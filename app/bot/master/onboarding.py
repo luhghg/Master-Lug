@@ -4,9 +4,10 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramUnauthorizedError
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy import select
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from app.core import app_state
 from app.core.config import settings
 from app.core.security import hash_token
 from app.models.bot import BotNiche, RegisteredBot
+from app.models.whitelist import PlatformWhitelist
 from app.services.bot_service import register_bot
 
 logger = logging.getLogger(__name__)
@@ -53,8 +55,27 @@ class OnboardingFSM(StatesGroup):
 
 # ── Step 1: Welcome + niche ───────────────────────────────────────────────────
 
-async def cmd_start(message: types.Message, state: FSMContext) -> None:
+async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSession) -> None:
     await state.clear()
+    user_id = message.from_user.id
+
+    # Check whitelist (platform owner is always allowed)
+    if user_id != settings.PLATFORM_OWNER_ID:
+        result = await session.execute(
+            select(PlatformWhitelist).where(PlatformWhitelist.telegram_id == user_id)
+        )
+        if not result.scalar_one_or_none():
+            owner_tag = f"@{app_state.master_bot_username}" if app_state.master_bot_username else "адміністратора"
+            await message.answer(
+                "👋 <b>Ласкаво просимо до Arete!</b>\n\n"
+                "Ця платформа працює за запрошенням.\n\n"
+                "Натисніть кнопку нижче щоб подати заявку на підключення:",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                    types.InlineKeyboardButton(text="📩 Подати заявку", callback_data="wl:request")
+                ]]),
+            )
+            return
+
     await message.answer(
         "👋 <b>Ласкаво просимо до Arete!</b>\n\n"
         "Я допоможу вам створити власного Telegram-бота для вашого бізнесу за 2 хвилини.\n\n"
@@ -87,7 +108,8 @@ async def got_niche(callback: types.CallbackQuery, state: FSMContext) -> None:
         "• Платформа не читає і не зберігає переписку ваших користувачів\n"
         "• Токен зберігається у зашифрованому вигляді\n"
         "• Ви можете відключити бота у будь-який момент\n"
-        "• Сервіс надається на умовах підписки\n\n"
+        "• Сервіс надається на умовах підписки\n"
+        "• <b>В описі вашого бота обов'язково має бути вказано посилання на платформу</b> — це буде встановлено автоматично\n\n"
         f"<i>Приклад назви для вашої ніші: <code>{example}</code></i>",
         reply_markup=types.InlineKeyboardMarkup(
             inline_keyboard=[
@@ -215,6 +237,11 @@ async def got_token(
         await webhook_bot.set_my_short_description(
             f"Powered by {master_tag}", language_code="uk",
         )
+        await webhook_bot.set_my_commands([
+            types.BotCommand(command="start", description="🏠 Головне меню"),
+            types.BotCommand(command="menu",  description="📋 Відкрити меню"),
+            types.BotCommand(command="back",  description="◀️ Повернутись до меню"),
+        ])
         await webhook_bot.session.close()
     except Exception:
         logger.exception("Failed to configure @%s", bot_info.username)
@@ -234,8 +261,39 @@ async def got_token(
     )
 
 
+async def whitelist_request(
+    callback: types.CallbackQuery,
+    bot: Bot,
+) -> None:
+    user = callback.from_user
+    mention = f"@{user.username}" if user.username else user.full_name
+    await callback.message.edit_text(
+        "✅ Заявку надіслано! Очікуйте підтвердження від адміністратора."
+    )
+    try:
+        await bot.send_message(
+            chat_id=settings.PLATFORM_OWNER_ID,
+            text=(
+                f"📩 <b>Нова заявка на підключення</b>\n\n"
+                f"👤 {mention}\n"
+                f"🆔 ID: <code>{user.id}</code>\n"
+                f"Ім'я: {user.full_name}"
+            ),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="✅ Дозволити", callback_data=f"wl:approve:{user.id}:{user.full_name[:30]}"),
+                types.InlineKeyboardButton(text="❌ Відхилити", callback_data=f"wl:decline:{user.id}"),
+            ]]),
+        )
+    except Exception:
+        logger.warning("Could not notify owner about whitelist request")
+    await callback.answer()
+
+
 def register(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
+    dp.message.register(cmd_start, Command("menu"))
+    dp.message.register(cmd_start, Command("back"))
+    dp.callback_query.register(whitelist_request, F.data == "wl:request")
     dp.callback_query.register(got_niche,     F.data.startswith("niche:"),         OnboardingFSM.select_niche)
     dp.callback_query.register(terms_agree,   F.data == "master:terms:agree",      OnboardingFSM.terms)
     dp.callback_query.register(terms_back,    F.data == "master:terms:back",       OnboardingFSM.terms)

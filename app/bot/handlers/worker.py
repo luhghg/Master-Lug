@@ -2,6 +2,7 @@ import logging
 import uuid
 
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import func, select
@@ -19,12 +20,31 @@ class WorkerFSM(StatesGroup):
     select_city = State()
 
 
+async def _safe_edit(message: types.Message, text: str, **kwargs) -> None:
+    try:
+        await message.edit_text(text, **kwargs)
+    except Exception:
+        await message.answer(text, **kwargs)
+
+
+def _worker_panel_kb() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[[
+        types.InlineKeyboardButton(text="🔍 Знайти роботу", callback_data="role:worker")
+    ]])
+
+
 # ── Entry ─────────────────────────────────────────────────────────────────────
 
 async def start_worker(
     callback: types.CallbackQuery, state: FSMContext
 ) -> None:
-    await callback.message.answer("📍 В якому місті шукаєте роботу?")
+    await _safe_edit(
+        callback.message,
+        "📍 В якому місті шукаєте роботу?",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="❌ Скасувати", callback_data="worker:cancel")
+        ]]),
+    )
     await state.set_state(WorkerFSM.select_city)
     await callback.answer()
 
@@ -49,7 +69,13 @@ async def got_city(
 
     jobs = await list_open_jobs(session, city)
     if not jobs:
-        await message.answer(f"😔 В місті <b>{city}</b> немає відкритих вакансій.", parse_mode="HTML")
+        await message.answer(
+            f"😔 В місті <b>{city}</b> немає відкритих вакансій.",
+            parse_mode="HTML",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="🔍 Пошукати в іншому місті", callback_data="role:worker")
+            ]]),
+        )
         await state.clear()
         return
 
@@ -147,6 +173,9 @@ async def apply_for_job(
         "Роботодавець розгляне її та зв'яжеться з вами.\n"
         "⏰ Будьте готові вчасно!",
         parse_mode="HTML",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="🔍 Шукати ще вакансії", callback_data="role:worker")
+        ]]),
     )
     await callback.answer()
 
@@ -197,9 +226,30 @@ async def apply_for_job(
         )
 
 
+async def cancel_worker(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await _safe_edit(
+        callback.message,
+        "👷 <b>Шукаєте роботу?</b>\n\nЯ допоможу знайти вакансії у вашому місті.",
+        reply_markup=_worker_panel_kb(),
+    )
+    await callback.answer()
+
+
+async def cmd_menu_worker(message: types.Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "👷 <b>Шукаєте роботу?</b>\n\nЯ допоможу знайти вакансії у вашому місті.",
+        reply_markup=_worker_panel_kb(),
+    )
+
+
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def register(dp: Dispatcher) -> None:
-    dp.callback_query.register(start_worker, F.data == "role:worker")
+    dp.message.register(cmd_menu_worker, Command("menu"))
+    dp.message.register(cmd_menu_worker, Command("back"))
+    dp.callback_query.register(start_worker,  F.data == "role:worker")
+    dp.callback_query.register(cancel_worker, F.data == "worker:cancel")
     dp.message.register(got_city, WorkerFSM.select_city)
     dp.callback_query.register(apply_for_job, F.data.startswith("apply:"))

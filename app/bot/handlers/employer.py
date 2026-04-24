@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import func, select
@@ -14,6 +15,13 @@ from app.models.user import User
 from app.services.job_service import create_job, format_job_card, generate_deep_link
 
 logger = logging.getLogger(__name__)
+
+async def _safe_edit(message: types.Message, text: str, **kwargs) -> None:
+    try:
+        await message.edit_text(text, **kwargs)
+    except Exception:
+        await message.answer(text, **kwargs)
+
 
 PAY_HINT = (
     "💰 Опишіть умови оплати:\n\n"
@@ -50,11 +58,13 @@ class EditJobFSM(StatesGroup):
 # ── Employer panel ────────────────────────────────────────────────────────────
 
 async def employer_panel(callback: types.CallbackQuery) -> None:
-    await callback.message.answer(
-        "👔 <b>Панель роботодавця</b>",
-        reply_markup=_employer_keyboard(),
-    )
+    await _safe_edit(callback.message, "👔 <b>Панель роботодавця</b>", reply_markup=_employer_keyboard())
     await callback.answer()
+
+
+async def cmd_menu_employer(message: types.Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("👔 <b>Панель роботодавця</b>", reply_markup=_employer_keyboard())
 
 
 def _employer_keyboard() -> types.InlineKeyboardMarkup:
@@ -72,7 +82,7 @@ def _employer_keyboard() -> types.InlineKeyboardMarkup:
 # ── Create job FSM ────────────────────────────────────────────────────────────
 
 async def start_create_job(callback: types.CallbackQuery, state: FSMContext) -> None:
-    await callback.message.answer("📍 В якому місті потрібен працівник?")
+    await _safe_edit(callback.message, "📍 В якому місті потрібен працівник?")
     await state.set_state(CreateJobFSM.city)
     await callback.answer()
 
@@ -208,12 +218,13 @@ async def confirm_job(
     )
     await callback.message.answer(
         card,
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-            types.InlineKeyboardButton(
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
                 text="📋 Копіювати оголошення",
                 copy_text=types.CopyTextButton(text=card),
-            )
-        ]]),
+            )],
+            [types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")],
+        ]),
     )
     await state.clear()
     await callback.answer()
@@ -221,7 +232,13 @@ async def confirm_job(
 
 async def cancel_job(callback: types.CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await callback.message.answer("❌ Створення вакансії скасовано.")
+    await _safe_edit(
+        callback.message,
+        "❌ Створення вакансії скасовано.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")
+        ]]),
+    )
     await callback.answer()
 
 
@@ -242,11 +259,13 @@ async def my_jobs(
     jobs = list(result.scalars().all())
 
     if not jobs:
-        await callback.message.answer(
+        await _safe_edit(
+            callback.message,
             "У вас немає активних вакансій.",
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                types.InlineKeyboardButton(text="➕ Створити вакансію", callback_data="role:employer")
-            ]])
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="➕ Створити вакансію", callback_data="role:employer")],
+                [types.InlineKeyboardButton(text="◀️ Меню",              callback_data="employer:panel")],
+            ]),
         )
         await callback.answer()
         return
@@ -304,7 +323,13 @@ async def archive(
     jobs = list(result.scalars().all())
 
     if not jobs:
-        await callback.message.answer("📁 Архів порожній.")
+        await _safe_edit(
+            callback.message,
+            "📁 Архів порожній.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")
+            ]]),
+        )
         await callback.answer()
         return
 
@@ -434,7 +459,13 @@ async def job_applicants(
     apps = list(result.scalars().all())
 
     if not apps:
-        await callback.message.answer("👥 Заявок на цю вакансію ще немає.")
+        await _safe_edit(
+            callback.message,
+            "👥 Заявок на цю вакансію ще немає.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")
+            ]]),
+        )
         await callback.answer()
         return
 
@@ -504,7 +535,13 @@ async def active_workers(
     rows = result.all()
 
     if not rows:
-        await callback.message.answer("👷 Наразі немає активних працівників.")
+        await _safe_edit(
+            callback.message,
+            "👷 Наразі немає активних працівників.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")
+            ]]),
+        )
         await callback.answer()
         return
 
@@ -539,13 +576,15 @@ async def edit_job_start(
         return
 
     await state.update_data(editing_job_id=str(job.id))
-    await callback.message.answer(
+    await _safe_edit(
+        callback.message,
         "✏️ <b>Що редагуємо?</b>",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="📝 Опис завдання",  callback_data="jedit:description")],
-            [types.InlineKeyboardButton(text="💰 Умови оплати",   callback_data="jedit:pay_description")],
+            [types.InlineKeyboardButton(text="📝 Опис завдання",   callback_data="jedit:description")],
+            [types.InlineKeyboardButton(text="💰 Умови оплати",    callback_data="jedit:pay_description")],
             [types.InlineKeyboardButton(text="👥 Кількість місць", callback_data="jedit:workers_needed")],
-            [types.InlineKeyboardButton(text="📌 Адреса",         callback_data="jedit:location")],
+            [types.InlineKeyboardButton(text="📌 Адреса",          callback_data="jedit:location")],
+            [types.InlineKeyboardButton(text="◀️ Меню",            callback_data="employer:panel")],
         ]),
     )
     await state.set_state(EditJobFSM.select_field)
@@ -602,7 +641,12 @@ async def edit_value_received(
         "workers_needed":  "Кількість місць",
         "location":        "Адреса",
     }
-    await message.answer(f"✅ <b>{field_labels[field]}</b> оновлено.")
+    await message.answer(
+        f"✅ <b>{field_labels[field]}</b> оновлено.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")
+        ]]),
+    )
     await state.clear()
 
 
@@ -642,7 +686,13 @@ async def blocked_list(
     blocked = list(result.scalars().all())
 
     if not blocked:
-        await callback.message.answer("🚫 Заблокованих користувачів немає.")
+        await _safe_edit(
+            callback.message,
+            "🚫 Заблокованих користувачів немає.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")
+            ]]),
+        )
         await callback.answer()
         return
 
@@ -783,6 +833,9 @@ def _parse_uuid(s: str):
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def register(dp: Dispatcher) -> None:
+    dp.message.register(cmd_menu_employer, Command("menu"))
+    dp.message.register(cmd_menu_employer, Command("back"))
+
     # Panel
     dp.callback_query.register(employer_panel,    F.data == "employer:panel")
     dp.callback_query.register(my_jobs,           F.data == "employer:my_jobs")

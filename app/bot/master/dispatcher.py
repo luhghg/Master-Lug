@@ -6,7 +6,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 from aiogram.types import Update
 
-from app.bot.master import onboarding
+from app.bot.master import onboarding, platform_admin
 from app.bot.middlewares.db_session import DBSessionMiddleware
 from app.core.config import settings
 from app.core.redis_client import get_redis
@@ -40,6 +40,7 @@ async def get_master_dispatcher() -> Dispatcher:
 
     dp = Dispatcher(storage=storage)
     dp.update.outer_middleware(DBSessionMiddleware())
+    platform_admin.register(dp)  # must be before onboarding — owner /start is caught here first
     onboarding.register(dp)
 
     _master_dp = dp

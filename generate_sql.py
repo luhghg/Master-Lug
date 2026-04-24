@@ -14,11 +14,20 @@ statements = []
 
 # 0. DROP старого (порядок важливий: спочатку залежні таблиці)
 statements += [
+    "DROP TABLE IF EXISTS platform_whitelist CASCADE",
+    "DROP TABLE IF EXISTS bot_configs CASCADE",
+    "DROP TABLE IF EXISTS tattoo_bookings CASCADE",
+    "DROP TABLE IF EXISTS tattoo_reviews CASCADE",
+    "DROP TABLE IF EXISTS tattoo_portfolio CASCADE",
+    "DROP TABLE IF EXISTS bot_subscriptions CASCADE",
     "DROP TABLE IF EXISTS applications CASCADE",
     "DROP TABLE IF EXISTS bot_blocked_users CASCADE",
     "DROP TABLE IF EXISTS jobs CASCADE",
     "DROP TABLE IF EXISTS registered_bots CASCADE",
     "DROP TABLE IF EXISTS users CASCADE",
+    "DROP TYPE IF EXISTS tattoostyle CASCADE",
+    "DROP TYPE IF EXISTS reviewstatus CASCADE",
+    "DROP TYPE IF EXISTS bookingstatus CASCADE",
     "DROP TYPE IF EXISTS applicationstatus CASCADE",
     "DROP TYPE IF EXISTS jobstatus CASCADE",
     "DROP TYPE IF EXISTS jobtype CASCADE",

@@ -45,6 +45,7 @@ async def handle_webhook(
         registered_bot_id=registered_bot.id,
         bot_username=registered_bot.bot_username,
         owner_telegram_id=registered_bot.owner_telegram_id,
+        bot_niche=registered_bot.niche.value,
         update_data=update_data,
     )
 

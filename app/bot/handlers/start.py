@@ -3,11 +3,14 @@ import uuid
 from datetime import datetime, timezone
 
 from aiogram import Dispatcher, F, types
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import app_state
+from app.models.tattoo import BotSubscription
 from app.models.user import User
 from app.services.job_service import get_job
 
@@ -29,6 +32,8 @@ async def cmd_start(
     command: CommandObject,
     session: AsyncSession,
     owner_telegram_id: int,
+    bot_niche: str = "LABOR",
+    registered_bot_id: int = 0,
 ) -> None:
     user = await _get_user(session, message.from_user.id)
 
@@ -56,13 +61,16 @@ async def cmd_start(
         )
         return
 
-    await _route(message, command.args, session, owner_telegram_id)
+    await _subscribe(session, registered_bot_id, message.from_user.id)
+    await _route(message, command.args, session, owner_telegram_id, bot_niche)
 
 
 async def consent_agree(
     callback: types.CallbackQuery,
     session: AsyncSession,
     owner_telegram_id: int,
+    bot_niche: str = "LABOR",
+    registered_bot_id: int = 0,
 ) -> None:
     arg = callback.data.split(":", 2)[2]  # consent:agree:<arg>
 
@@ -81,9 +89,10 @@ async def consent_agree(
         user.terms_agreed_at = datetime.now(timezone.utc)
     await session.commit()
 
+    await _subscribe(session, registered_bot_id, callback.from_user.id)
     await callback.message.delete()
     await callback.answer()
-    await _route(callback.message, arg or None, session, owner_telegram_id)
+    await _route(callback.message, arg or None, session, owner_telegram_id, bot_niche)
 
 
 async def consent_decline(callback: types.CallbackQuery) -> None:
@@ -101,9 +110,21 @@ async def _route(
     args: str | None,
     session: AsyncSession,
     owner_telegram_id: int,
+    bot_niche: str = "LABOR",
 ) -> None:
-    user_id = message.chat.id  # works for both Message and edited message
+    from app.bot.handlers.niche.beauty.client import show_client_menu
+    from app.bot.handlers.niche.beauty.admin import show_admin_menu
 
+    user_id = message.chat.id
+
+    if bot_niche == "BEAUTY":
+        if user_id == owner_telegram_id:
+            await show_admin_menu(message)
+        else:
+            await show_client_menu(message)
+        return
+
+    # LABOR (default)
     if args and args.startswith("job_"):
         job_id_str = args[4:]
         try:
@@ -186,7 +207,37 @@ async def _get_user(session: AsyncSession, telegram_id: int) -> User | None:
     return result.scalar_one_or_none()
 
 
+async def _subscribe(session: AsyncSession, bot_id: int, telegram_id: int) -> None:
+    if not bot_id:
+        return
+    stmt = (
+        pg_insert(BotSubscription)
+        .values(bot_id=bot_id, telegram_id=telegram_id)
+        .on_conflict_do_nothing(constraint="uq_bot_subscription")
+    )
+    await session.execute(stmt)
+    await session.commit()
+
+
+async def cmd_menu(
+    message: types.Message,
+    state: FSMContext,
+    session: AsyncSession,
+    owner_telegram_id: int,
+    bot_niche: str = "LABOR",
+    registered_bot_id: int = 0,
+) -> None:
+    await state.clear()
+    user = await _get_user(session, message.from_user.id)
+    if user is None or user.terms_agreed_at is None:
+        await message.answer("Спочатку потрібно погодитись з умовами. Натисніть /start")
+        return
+    await _route(message, None, session, owner_telegram_id, bot_niche)
+
+
 def register(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
+    dp.message.register(cmd_menu,  Command("menu"))
+    dp.message.register(cmd_menu,  Command("back"))
     dp.callback_query.register(consent_agree, F.data.startswith("consent:agree:"))
     dp.callback_query.register(consent_decline, F.data == "consent:decline")

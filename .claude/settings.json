@@ -8,7 +8,22 @@
       "Bash(python generate_sql.py)",
       "Bash(PYTHONIOENCODING=utf-8 python generate_sql.py)",
       "Bash(Get-Content schema.sql)",
-      "Bash(PYTHONIOENCODING=utf-8 python register_bot.py)"
+      "Bash(PYTHONIOENCODING=utf-8 python register_bot.py)",
+      "Bash(mkdir -p /c/Users/Admin/Desktop/aasabot/app/bot/handlers/niche/beauty)",
+      "Bash(python3 generate_sql.py)",
+      "Bash(py generate_sql.py)",
+      "Bash(where python *)",
+      "Bash(where py *)",
+      "Read(//c/Users/Admin/AppData/Local/Programs/Python//**)",
+      "Bash(PYTHONIOENCODING=utf-8 /c/Users/Admin/Desktop/aasabot/venv/Scripts/python.exe generate_sql.py)",
+      "Bash(PYTHONIOENCODING=utf-8 /c/Users/Admin/AppData/Local/Programs/Python/Python312/python.exe generate_sql.py)",
+      "Bash(PYTHONPATH=/c/Users/Admin/Desktop/aasabot/venv/Lib/site-packages PYTHONIOENCODING=utf-8 /c/Users/Admin/AppData/Local/Programs/Python/Python312/python.exe generate_sql.py)",
+      "Bash(start \"\" \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
+      "Bash(PYTHONPATH=venv/Lib/site-packages /c/Users/Admin/AppData/Local/Programs/Python/Python312/python.exe generate_sql.py)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=venv/Lib/site-packages /c/Users/Admin/AppData/Local/Programs/Python/Python312/python.exe generate_sql.py)",
+      "Bash(curl -s http://localhost:4040/api/tunnels)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(t['public_url']\\) for t in d.get\\('tunnels',[]\\)]\")",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }

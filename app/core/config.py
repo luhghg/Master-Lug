@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # --- Token Encryption ---
     ENCRYPTION_KEY: str            # Fernet key: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
+    # --- Platform Owner ---
+    PLATFORM_OWNER_ID: int = 0     # Telegram ID of the platform developer/owner
+
     # --- Rate Limiting ---
     RATE_LIMIT_REQUESTS: int = 10
     RATE_LIMIT_WINDOW: int = 60    # seconds

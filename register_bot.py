@@ -17,6 +17,10 @@ print("=== Реєстрація нового бота ===\n")
 plain_token  = input("Токен бота (від BotFather): ").strip()
 bot_username = input("Username бота БЕЗ @: ").strip()
 owner_id     = input("Твій Telegram ID: ").strip()
+print("Ніша: 1) LABOR  2) BEAUTY  3) SPORTS")
+niche_choice = input("Обери номер [1]: ").strip() or "1"
+niche_map = {"1": "LABOR", "2": "BEAUTY", "3": "SPORTS"}
+niche = niche_map.get(niche_choice, "LABOR")
 
 token_hash      = hashlib.sha256(plain_token.encode()).hexdigest()
 encrypted_token = fernet.encrypt(plain_token.encode()).decode()
@@ -24,7 +28,7 @@ encrypted_token = fernet.encrypt(plain_token.encode()).decode()
 sql = (
     "INSERT INTO registered_bots "
     "(owner_telegram_id, token_hash, encrypted_token, bot_username, niche, is_active) "
-    f"VALUES ({owner_id}, '{token_hash}', '{encrypted_token}', '{bot_username}', 'LABOR', true) "
+    f"VALUES ({owner_id}, '{token_hash}', '{encrypted_token}', '{bot_username}', '{niche}', true) "
     "ON CONFLICT (token_hash) DO NOTHING;"
 )
 
