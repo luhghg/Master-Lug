@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import app_state
 from app.models.tattoo import BotSubscription
 from app.models.user import User
+from app.services.config_service import is_demo_bot
 from app.services.job_service import get_job
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ async def cmd_start(
         return
 
     await _subscribe(session, registered_bot_id, message.from_user.id)
-    await _route(message, command.args, session, owner_telegram_id, bot_niche)
+    await _route(message, command.args, session, owner_telegram_id, bot_niche, registered_bot_id)
 
 
 async def consent_agree(
@@ -92,7 +93,7 @@ async def consent_agree(
     await _subscribe(session, registered_bot_id, callback.from_user.id)
     await callback.message.delete()
     await callback.answer()
-    await _route(callback.message, arg or None, session, owner_telegram_id, bot_niche)
+    await _route(callback.message, arg or None, session, owner_telegram_id, bot_niche, registered_bot_id)
 
 
 async def consent_decline(callback: types.CallbackQuery) -> None:
@@ -111,9 +112,24 @@ async def _route(
     session: AsyncSession,
     owner_telegram_id: int,
     bot_niche: str = "LABOR",
+    registered_bot_id: int = 0,
 ) -> None:
     from app.bot.handlers.niche.beauty.client import show_client_menu
     from app.bot.handlers.niche.beauty.admin import show_admin_menu
+    from app.bot.handlers.worker import show_worker_home
+
+    # Demo mode — show role selector instead of routing
+    if registered_bot_id and is_demo_bot(registered_bot_id):
+        await message.answer(
+            "🤖 <b>Ласкаво просимо до демо-боту MasterLug!</b>\n\n"
+            "Тут ви можете побачити як працює платформа зсередини.\n\n"
+            "Оберіть від чийого імені хочете переглянути:",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="👤 Тестування очима клієнта", callback_data="demo:client")],
+                [types.InlineKeyboardButton(text="⚙️ Тестування очима адміна",  callback_data="demo:admin")],
+            ]),
+        )
+        return
 
     user_id = message.chat.id
 
@@ -138,7 +154,7 @@ async def _route(
     if user_id == owner_telegram_id:
         await _show_employer_panel(message)
     else:
-        await _show_worker_panel(message)
+        await show_worker_home(message, session, registered_bot_id)
 
 
 # ── Panels ────────────────────────────────────────────────────────────────────
@@ -232,12 +248,41 @@ async def cmd_menu(
     if user is None or user.terms_agreed_at is None:
         await message.answer("Спочатку потрібно погодитись з умовами. Натисніть /start")
         return
-    await _route(message, None, session, owner_telegram_id, bot_niche)
+    await _route(message, None, session, owner_telegram_id, bot_niche, registered_bot_id)
+
+
+async def demo_pick_client(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+    bot_niche: str = "LABOR",
+) -> None:
+    from app.bot.handlers.niche.beauty.client import show_client_menu
+    from app.bot.handlers.worker import show_worker_home
+    if bot_niche == "BEAUTY":
+        await show_client_menu(callback.message, session, registered_bot_id)
+    else:
+        await show_worker_home(callback.message, session, registered_bot_id)
+    await callback.answer()
+
+
+async def demo_pick_admin(
+    callback: types.CallbackQuery,
+    bot_niche: str = "LABOR",
+) -> None:
+    from app.bot.handlers.niche.beauty.admin import show_admin_menu
+    if bot_niche == "BEAUTY":
+        await show_admin_menu(callback.message)
+    else:
+        await _show_employer_panel(callback.message)
+    await callback.answer()
 
 
 def register(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_menu,  Command("menu"))
     dp.message.register(cmd_menu,  Command("back"))
-    dp.callback_query.register(consent_agree, F.data.startswith("consent:agree:"))
-    dp.callback_query.register(consent_decline, F.data == "consent:decline")
+    dp.callback_query.register(consent_agree,    F.data.startswith("consent:agree:"))
+    dp.callback_query.register(consent_decline,  F.data == "consent:decline")
+    dp.callback_query.register(demo_pick_client, F.data == "demo:client")
+    dp.callback_query.register(demo_pick_admin,  F.data == "demo:admin")

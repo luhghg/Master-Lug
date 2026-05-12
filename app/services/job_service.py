@@ -42,6 +42,16 @@ async def get_job(session: AsyncSession, job_id: uuid.UUID) -> Job | None:
     return result.scalar_one_or_none()
 
 
+async def list_bot_jobs(session: AsyncSession, bot_id: int, limit: int = 20) -> list[Job]:
+    result = await session.execute(
+        select(Job)
+        .where(Job.bot_id == bot_id, Job.status == JobStatus.OPEN)
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def list_open_jobs(session: AsyncSession, city: str, limit: int = 5) -> list[Job]:
     result = await session.execute(
         select(Job)

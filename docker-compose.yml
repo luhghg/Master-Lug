@@ -1,24 +1,25 @@
 services:
   app:
-    image: ${DOCKER_IMAGE:-lugvpluge/masterlug:latest}
+    build: .
     restart: unless-stopped
-    env_file: .env.prod
+    env_file: .env
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    networks: [masterlug]
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    restart: unless-stopped
+    command: http --url=${NGROK_DOMAIN} app:8000
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    depends_on:
+      - app
+    ports:
+      - "4040:4040"
     networks: [masterlug]
 
   db:
@@ -44,23 +45,9 @@ services:
       - redisdata:/data
     networks: [masterlug]
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-    networks: [masterlug]
-
 volumes:
   pgdata:
   redisdata:
-  caddy_data:
-  caddy_config:
 
 networks:
   masterlug:

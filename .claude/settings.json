@@ -23,7 +23,10 @@
       "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=venv/Lib/site-packages /c/Users/Admin/AppData/Local/Programs/Python/Python312/python.exe generate_sql.py)",
       "Bash(curl -s http://localhost:4040/api/tunnels)",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(t['public_url']\\) for t in d.get\\('tunnels',[]\\)]\")",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(venv/Scripts/pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(timeout 5)"
     ]
   }
 }

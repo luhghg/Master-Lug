@@ -8,7 +8,6 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import app_state
@@ -26,7 +25,6 @@ NICHE_LABELS: dict[BotNiche, str] = {
     BotNiche.SPORTS: "🏋️ Спорт та фітнес",
 }
 
-# Naming convention per niche
 NICHE_NAME_EXAMPLES: dict[BotNiche, str] = {
     BotNiche.LABOR:  "vinnytsia_robota_vasyl_bot",
     BotNiche.BEAUTY: "kyiv_tatu_olga_bot",
@@ -53,31 +51,158 @@ class OnboardingFSM(StatesGroup):
     waiting_token = State()
 
 
-# ── Step 1: Welcome + niche ───────────────────────────────────────────────────
+# ── Landing helpers ───────────────────────────────────────────────────────────
+
+def _connect_btn() -> types.InlineKeyboardButton:
+    return types.InlineKeyboardButton(text="📩 Підключитись", callback_data="wl:request")
+
+def _back_btn() -> types.InlineKeyboardButton:
+    return types.InlineKeyboardButton(text="◀️ Назад", callback_data="land:home")
+
+def _landing_home_kb() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="💼 Бот для найму",      callback_data="land:labor")],
+        [types.InlineKeyboardButton(text="💅 Бот для тату/краси", callback_data="land:beauty")],
+        [types.InlineKeyboardButton(text="💰 Ціни",               callback_data="land:pricing")],
+        [_connect_btn()],
+    ])
+
+def _landing_home_text() -> str:
+    return (
+        "👋 <b>Ласкаво просимо до MasterLug!</b>\n\n"
+        "Платформа для створення Telegram-ботів під ваш бізнес.\n\n"
+        "⚡️ Готовий бот за 2 хвилини\n"
+        "🔧 Без програмування\n"
+        "💰 Від 199 грн/місяць\n\n"
+        "Оберіть вашу нішу щоб побачити демо:"
+    )
+
+async def _safe_edit(message: types.Message, text: str, **kwargs) -> None:
+    try:
+        await message.edit_text(text, **kwargs)
+    except Exception:
+        await message.answer(text, **kwargs)
+
+
+# ── Landing pages ─────────────────────────────────────────────────────────────
+
+async def land_home(callback: types.CallbackQuery) -> None:
+    await _safe_edit(callback.message, _landing_home_text(), reply_markup=_landing_home_kb())
+    await callback.answer()
+
+
+async def land_labor(callback: types.CallbackQuery) -> None:
+    rows = []
+    if settings.DEMO_BOT_LABOR:
+        rows.append([types.InlineKeyboardButton(
+            text="🤖 Спробувати демо-бот",
+            url=f"https://t.me/{settings.DEMO_BOT_LABOR}",
+        )])
+    rows.append([_back_btn(), _connect_btn()])
+
+    await _safe_edit(
+        callback.message,
+        "💼 <b>Бот для найму персоналу</b>\n\n"
+        "Для роботодавців у будівництві, складах, промоціях, "
+        "сервісі — де потрібні разові або постійні працівники.\n\n"
+        "<b>Що вміє бот:</b>\n"
+        "✅ Публікація вакансій — місто, оплата, адреса, час\n"
+        "✅ Кандидати відгукуються прямо в боті\n"
+        "✅ Ви приймаєте або відхиляєте одним кліком\n"
+        "✅ Рейтинг працівників — захист від недобросовісних\n"
+        "✅ Архів вакансій та статистика по заявках\n\n"
+        "<i>Роботодавець публікує — кандидати самі приходять.</i>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+async def land_beauty(callback: types.CallbackQuery) -> None:
+    rows = []
+    if settings.DEMO_BOT_BEAUTY:
+        rows.append([types.InlineKeyboardButton(
+            text="🤖 Спробувати демо-бот",
+            url=f"https://t.me/{settings.DEMO_BOT_BEAUTY}",
+        )])
+    rows.append([_back_btn(), _connect_btn()])
+
+    await _safe_edit(
+        callback.message,
+        "💅 <b>Бот для тату-майстрів та б'юті-індустрії</b>\n\n"
+        "Для тату-майстрів, косметологів, нейл-майстрів, "
+        "перукарів — будь-яких б'юті-спеціалістів.\n\n"
+        "<b>Що вміє бот:</b>\n"
+        "✅ Онлайн-запис — клієнт обирає дату і час сам\n"
+        "✅ Портфоліо по стилях з фото\n"
+        "✅ Відгуки клієнтів після сеансу\n"
+        "✅ Миттєві сповіщення про нові записи\n"
+        "✅ Управління розкладом і слотами\n\n"
+        "<i>Клієнти записуються самі — ви тільки працюєте.</i>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+_VIDEO_MAP = {
+    "labor_client":  lambda: settings.DEMO_VIDEO_LABOR_CLIENT,
+    "labor_admin":   lambda: settings.DEMO_VIDEO_LABOR_ADMIN,
+    "beauty_client": lambda: settings.DEMO_VIDEO_BEAUTY_CLIENT,
+    "beauty_admin":  lambda: settings.DEMO_VIDEO_BEAUTY_ADMIN,
+}
+
+async def land_video(callback: types.CallbackQuery) -> None:
+    key = callback.data.split(":")[2]
+    getter = _VIDEO_MAP.get(key)
+    file_id = getter() if getter else ""
+    if not file_id:
+        await callback.answer("Відео ще не додано", show_alert=True)
+        return
+    await callback.message.answer_video(
+        video=file_id,
+        caption="📹 Демо-відео платформи Arete",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="📩 Підключитись", callback_data="wl:request"),
+        ]]),
+    )
+    await callback.answer()
+
+
+async def land_pricing(callback: types.CallbackQuery) -> None:
+    await _safe_edit(
+        callback.message,
+        "💰 <b>Ціни та умови</b>\n\n"
+        "🎯 <b>Один план — все включено</b>\n\n"
+        "       <b>199 грн / місяць</b>\n\n"
+        "✅ Необмежена кількість клієнтів\n"
+        "✅ Всі функції платформи\n"
+        "✅ Технічна підтримка\n"
+        "✅ Оновлення безкоштовно\n"
+        "✅ Ваш особистий Telegram-бот\n\n"
+        "🎁 <b>Перший місяць — безкоштовно</b>\n"
+        "<i>(для перших 10 клієнтів)</i>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [_back_btn(), _connect_btn()],
+        ]),
+    )
+    await callback.answer()
+
+
+# ── /start ────────────────────────────────────────────────────────────────────
 
 async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSession) -> None:
     await state.clear()
     user_id = message.from_user.id
 
-    # Check whitelist (platform owner is always allowed)
     if user_id != settings.PLATFORM_OWNER_ID:
         result = await session.execute(
             select(PlatformWhitelist).where(PlatformWhitelist.telegram_id == user_id)
         )
         if not result.scalar_one_or_none():
-            owner_tag = f"@{app_state.master_bot_username}" if app_state.master_bot_username else "адміністратора"
-            await message.answer(
-                "👋 <b>Ласкаво просимо до Arete!</b>\n\n"
-                "Ця платформа працює за запрошенням.\n\n"
-                "Натисніть кнопку нижче щоб подати заявку на підключення:",
-                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text="📩 Подати заявку", callback_data="wl:request")
-                ]]),
-            )
+            await message.answer(_landing_home_text(), reply_markup=_landing_home_kb())
             return
 
     await message.answer(
-        "👋 <b>Ласкаво просимо до Arete!</b>\n\n"
+        "👋 <b>Ласкаво просимо до MasterLug!</b>\n\n"
         "Я допоможу вам створити власного Telegram-бота для вашого бізнесу за 2 хвилини.\n\n"
         "Оберіть нішу:",
         reply_markup=types.InlineKeyboardMarkup(
@@ -90,17 +215,16 @@ async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSes
     await state.set_state(OnboardingFSM.select_niche)
 
 
-# ── Step 2: Niche selected → show terms + naming rules ───────────────────────
+# ── Onboarding: niche → terms → token ────────────────────────────────────────
 
 async def got_niche(callback: types.CallbackQuery, state: FSMContext) -> None:
     niche_value = callback.data.split(":", 1)[1]
     niche = BotNiche(niche_value)
     await state.update_data(niche=niche_value)
-    label = NICHE_LABELS[niche]
     example = NICHE_NAME_EXAMPLES[niche]
 
     await callback.message.edit_text(
-        f"✅ Обрано: <b>{label}</b>\n\n"
+        f"✅ Обрано: <b>{NICHE_LABELS[niche]}</b>\n\n"
         f"{NAMING_RULES}\n\n"
         "─────────────────────\n\n"
         "<b>Умови використання платформи:</b>\n\n"
@@ -111,28 +235,14 @@ async def got_niche(callback: types.CallbackQuery, state: FSMContext) -> None:
         "• Сервіс надається на умовах підписки\n"
         "• <b>В описі вашого бота обов'язково має бути вказано посилання на платформу</b> — це буде встановлено автоматично\n\n"
         f"<i>Приклад назви для вашої ніші: <code>{example}</code></i>",
-        reply_markup=types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text="✅ Розумію та погоджуюсь",
-                        callback_data="master:terms:agree",
-                    )
-                ],
-                [
-                    types.InlineKeyboardButton(
-                        text="◀️ Змінити нішу",
-                        callback_data="master:terms:back",
-                    )
-                ],
-            ]
-        ),
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="✅ Розумію та погоджуюсь", callback_data="master:terms:agree")],
+            [types.InlineKeyboardButton(text="◀️ Змінити нішу",          callback_data="master:terms:back")],
+        ]),
     )
     await state.set_state(OnboardingFSM.terms)
     await callback.answer()
 
-
-# ── Step 3: Terms accepted → token instruction ────────────────────────────────
 
 async def terms_agree(callback: types.CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
@@ -155,24 +265,18 @@ async def terms_agree(callback: types.CallbackQuery, state: FSMContext) -> None:
 async def terms_back(callback: types.CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text(
         "Оберіть нішу:",
-        reply_markup=types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [types.InlineKeyboardButton(text=label, callback_data=f"niche:{niche.value}")]
-                for niche, label in NICHE_LABELS.items()
-            ]
-        ),
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text=label, callback_data=f"niche:{niche.value}")]
+            for niche, label in NICHE_LABELS.items()
+        ]),
     )
     await state.set_state(OnboardingFSM.select_niche)
     await callback.answer()
 
 
-# ── Step 4: Receive and validate token ───────────────────────────────────────
+# ── Token validation & bot registration ──────────────────────────────────────
 
-async def got_token(
-    message: types.Message,
-    state: FSMContext,
-    session: AsyncSession,
-) -> None:
+async def got_token(message: types.Message, state: FSMContext, session: AsyncSession) -> None:
     plain_token = message.text.strip()
 
     if ":" not in plain_token or len(plain_token) < 30:
@@ -194,10 +298,7 @@ async def got_token(
         return
 
     try:
-        temp_bot = Bot(
-            token=plain_token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        )
+        temp_bot = Bot(token=plain_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         bot_info = await temp_bot.get_me()
         await temp_bot.session.close()
     except TelegramUnauthorizedError:
@@ -234,9 +335,7 @@ async def got_token(
             f"Цей бот створено та підтримується через {master_tag}.\n\nНіша: {NICHE_LABELS[niche]}",
             language_code="uk",
         )
-        await webhook_bot.set_my_short_description(
-            f"Powered by {master_tag}", language_code="uk",
-        )
+        await webhook_bot.set_my_short_description(f"Powered by {master_tag}", language_code="uk")
         await webhook_bot.set_my_commands([
             types.BotCommand(command="start", description="🏠 Головне меню"),
             types.BotCommand(command="menu",  description="📋 Відкрити меню"),
@@ -245,9 +344,7 @@ async def got_token(
         await webhook_bot.session.close()
     except Exception:
         logger.exception("Failed to configure @%s", bot_info.username)
-        await message.answer(
-            "⚠️ Бот зареєстровано, але webhook не налаштувався. Зверніться до підтримки."
-        )
+        await message.answer("⚠️ Бот зареєстровано, але webhook не налаштувався. Зверніться до підтримки.")
         await state.clear()
         return
 
@@ -261,14 +358,16 @@ async def got_token(
     )
 
 
-async def whitelist_request(
-    callback: types.CallbackQuery,
-    bot: Bot,
-) -> None:
+# ── Whitelist request (from landing) ─────────────────────────────────────────
+
+async def whitelist_request(callback: types.CallbackQuery, bot: Bot) -> None:
     user = callback.from_user
     mention = f"@{user.username}" if user.username else user.full_name
-    await callback.message.edit_text(
-        "✅ Заявку надіслано! Очікуйте підтвердження від адміністратора."
+    await _safe_edit(
+        callback.message,
+        "✅ <b>Заявку надіслано!</b>\n\n"
+        "Очікуйте підтвердження від адміністратора.\n"
+        "Зазвичай відповідаємо протягом кількох годин.",
     )
     try:
         await bot.send_message(
@@ -289,12 +388,47 @@ async def whitelist_request(
     await callback.answer()
 
 
+# ── Owner utility: capture file_id ───────────────────────────────────────────
+
+async def _capture_file_id(message: types.Message) -> None:
+    file_id = message.video.file_id if message.video else message.document.file_id
+    await message.reply(
+        f"📋 <b>file_id:</b>\n\n"
+        f"<code>{file_id}</code>\n\n"
+        f"Встав у <code>.env</code> потрібний рядок:\n\n"
+        f"<code>DEMO_VIDEO_LABOR_CLIENT={file_id}</code>\n"
+        f"<code>DEMO_VIDEO_LABOR_ADMIN={file_id}</code>\n"
+        f"<code>DEMO_VIDEO_BEAUTY_CLIENT={file_id}</code>\n"
+        f"<code>DEMO_VIDEO_BEAUTY_ADMIN={file_id}</code>"
+    )
+
+
+# ── Registration ──────────────────────────────────────────────────────────────
+
 def register(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_start, Command("menu"))
     dp.message.register(cmd_start, Command("back"))
+
+    # Landing navigation
+    dp.callback_query.register(land_home,    F.data == "land:home")
+    dp.callback_query.register(land_labor,   F.data == "land:labor")
+    dp.callback_query.register(land_beauty,  F.data == "land:beauty")
+    dp.callback_query.register(land_pricing, F.data == "land:pricing")
+    dp.callback_query.register(land_video,   F.data.startswith("land:video:"))
+
+    # Owner utility: send any video to master bot → get file_id back
+    dp.message.register(
+        _capture_file_id,
+        F.from_user.id == settings.PLATFORM_OWNER_ID,
+        F.video | F.document,
+    )
+
+    # Whitelist
     dp.callback_query.register(whitelist_request, F.data == "wl:request")
-    dp.callback_query.register(got_niche,     F.data.startswith("niche:"),         OnboardingFSM.select_niche)
-    dp.callback_query.register(terms_agree,   F.data == "master:terms:agree",      OnboardingFSM.terms)
-    dp.callback_query.register(terms_back,    F.data == "master:terms:back",       OnboardingFSM.terms)
+
+    # Onboarding FSM
+    dp.callback_query.register(got_niche,   F.data.startswith("niche:"),       OnboardingFSM.select_niche)
+    dp.callback_query.register(terms_agree, F.data == "master:terms:agree",    OnboardingFSM.terms)
+    dp.callback_query.register(terms_back,  F.data == "master:terms:back",     OnboardingFSM.terms)
     dp.message.register(got_token, OnboardingFSM.waiting_token)

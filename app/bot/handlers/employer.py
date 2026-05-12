@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.application import Application, ApplicationStatus
 from app.models.blocked_user import BotBlockedUser
 from app.models.job import Job, JobStatus, JobType
+from app.models.tattoo import BotSubscription
 from app.models.user import User
+from app.services.config_service import get_cfg, set_cfg
 from app.services.job_service import create_job, format_job_card, generate_deep_link
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,18 @@ class EditJobFSM(StatesGroup):
     waiting_value = State()
 
 
+# ── FSM: Broadcast to accepted workers ───────────────────────────────────────
+
+class BroadcastFSM(StatesGroup):
+    waiting_message = State()
+
+
+# ── FSM: Accept with details ──────────────────────────────────────────────────
+
+class AcceptDetailsFSM(StatesGroup):
+    waiting_details = State()
+
+
 # ── Employer panel ────────────────────────────────────────────────────────────
 
 async def employer_panel(callback: types.CallbackQuery) -> None:
@@ -75,6 +89,7 @@ def _employer_keyboard() -> types.InlineKeyboardMarkup:
              types.InlineKeyboardButton(text="📁 Архів",             callback_data="employer:archive")],
             [types.InlineKeyboardButton(text="👷 Мої працівники",    callback_data="employer:active_workers"),
              types.InlineKeyboardButton(text="🚫 Заблоковані",       callback_data="employer:blocked")],
+            [types.InlineKeyboardButton(text="⚙️ Налаштування",      callback_data="employer:settings")],
         ]
     )
 
@@ -195,6 +210,7 @@ async def confirm_job(
     session: AsyncSession,
     registered_bot_id: int,
     bot_username: str,
+    bot: Bot,
 ) -> None:
     data = await state.get_data()
     is_permanent = data["job_type"] == JobType.PERMANENT.value
@@ -228,6 +244,25 @@ async def confirm_job(
     )
     await state.clear()
     await callback.answer()
+
+    subs_result = await session.execute(
+        select(BotSubscription.telegram_id).where(
+            BotSubscription.bot_id == registered_bot_id,
+            BotSubscription.telegram_id != callback.from_user.id,
+        )
+    )
+    subscriber_ids = [row[0] for row in subs_result.all()]
+    if subscriber_ids:
+        notif_text = "🔔 <b>Нова вакансія!</b>\n\nВідкрийте бот щоб переглянути та подати заявку /start"
+        sent = 0
+        for tid in subscriber_ids:
+            try:
+                await bot.send_message(chat_id=tid, text=notif_text)
+                sent += 1
+            except Exception:
+                pass
+        if sent:
+            logger.info("Notified %d subscribers about new job %s", sent, job.id)
 
 
 async def cancel_job(callback: types.CallbackQuery, state: FSMContext) -> None:
@@ -296,6 +331,7 @@ async def my_jobs(
                     types.InlineKeyboardButton(text="✏️ Редагувати",   callback_data=f"job:{job.id}:edit"),
                 ],
                 [
+                    types.InlineKeyboardButton(text="📢 Розсилка",     callback_data=f"job:{job.id}:broadcast"),
                     types.InlineKeyboardButton(text="📵 Деактивувати", callback_data=f"job:{job.id}:deactivate"),
                 ],
             ]),
@@ -371,7 +407,13 @@ async def deactivate_job(
     job.status = JobStatus.CANCELLED
     await session.commit()
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("📵 Вакансію деактивовано та переміщено в архів.")
+    await callback.message.answer(
+        "📵 Вакансію деактивовано та переміщено в архів.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="📋 Активні вакансії", callback_data="employer:my_jobs")],
+            [types.InlineKeyboardButton(text="◀️ Меню",             callback_data="employer:panel")],
+        ]),
+    )
     await callback.answer()
 
 
@@ -750,7 +792,7 @@ async def _get_pending_app(
 
 
 async def accept_application(
-    callback: types.CallbackQuery, session: AsyncSession, bot: Bot
+    callback: types.CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     app_id = int(callback.data.split(":")[1])
     application = await _get_pending_app(callback, session, app_id)
@@ -771,29 +813,91 @@ async def accept_application(
         )
         return
 
+    await state.update_data(accept_app_id=app_id)
+    worker_name = await _get_user_name(session, application.worker_telegram_id)
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        f"✅ Приймаєте <b>{worker_name}</b>.\n\n"
+        "📋 Введіть деталі для працівника:\n"
+        "<i>Адреса збору, точний час, що взяти з собою, "
+        "контактний номер — все що йому треба знати.</i>\n\n"
+        "<b>Приклад:</b>\n"
+        "вул. Соборна 12, біля входу о 8:00\n"
+        "Мати з собою паспорт та робочий одяг\n"
+        "Питання: +380XXXXXXXXX",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="❌ Скасувати", callback_data="accept:cancel"),
+        ]]),
+    )
+    await state.set_state(AcceptDetailsFSM.waiting_details)
+    await callback.answer()
+
+
+async def accept_cancel(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text("↩️ Скасовано. Заявка залишається в очікуванні.")
+    await callback.answer()
+
+
+async def got_acceptance_details(
+    message: types.Message, state: FSMContext,
+    session: AsyncSession, bot: Bot,
+) -> None:
+    data = await state.get_data()
+    app_id = data["accept_app_id"]
+    await state.clear()
+
+    result = await session.execute(select(Application).where(Application.id == app_id))
+    application = result.scalar_one_or_none()
+    if not application or application.status != ApplicationStatus.PENDING:
+        await message.answer("❌ Заявка вже оброблена.")
+        return
+
+    job = await session.get(Job, application.job_id)
+    accepted_count = await session.scalar(
+        select(func.count()).where(
+            Application.job_id == application.job_id,
+            Application.status == ApplicationStatus.ACCEPTED,
+        )
+    ) or 0
+
     application.status = ApplicationStatus.ACCEPTED
     application.confirmed_at = datetime.now(timezone.utc)
 
-    # Auto-close job when last spot is filled
     if accepted_count + 1 >= job.workers_needed:
         job.status = JobStatus.ASSIGNED
-        await callback.message.answer(
+        await message.answer(
             f"🔒 <b>Всі {job.workers_needed} місць заповнено!</b> Вакансію закрито автоматично."
         )
 
     await session.commit()
 
+    employer_url = f"tg://user?id={job.employer_telegram_id}"
     try:
         await bot.send_message(
             chat_id=application.worker_telegram_id,
-            text="🎉 <b>Вашу заявку прийнято!</b>\n\nРоботодавець чекає на вас. Будьте вчасні! ✅",
+            text=(
+                f"🎉 <b>Вашу заявку прийнято!</b>\n\n"
+                f"📍 {job.city} — {job.pay_description}\n\n"
+                f"📋 <b>Деталі від роботодавця:</b>\n{message.text}\n\n"
+                "Якщо є питання — напишіть роботодавцю напряму:"
+            ),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="✉️ Написати роботодавцю", url=employer_url),
+            ]]),
         )
     except Exception:
         logger.warning("Could not notify worker %s", application.worker_telegram_id)
 
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("✅ Заявку прийнято. Працівника повідомлено.")
-    await callback.answer()
+    worker_url = f"tg://user?id={application.worker_telegram_id}"
+    await message.answer(
+        "✅ <b>Прийнято! Деталі надіслано працівнику.</b>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="✉️ Написати працівнику", url=worker_url)],
+            [types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel")],
+        ]),
+    )
 
 
 async def reject_application(
@@ -816,8 +920,182 @@ async def reject_application(
         logger.warning("Could not notify worker %s", application.worker_telegram_id)
 
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("❌ Заявку відхилено.")
+    await callback.message.answer(
+        "❌ Заявку відхилено.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel"),
+        ]]),
+    )
     await callback.answer()
+
+
+# ── Broadcast to accepted workers ────────────────────────────────────────────
+
+async def broadcast_start(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    job_id_str = callback.data.split(":")[1]
+    job = await session.get(Job, _parse_uuid(job_id_str))
+    if not job:
+        await callback.answer("Вакансію не знайдено.", show_alert=True)
+        return
+
+    accepted_count = await session.scalar(
+        select(func.count()).where(
+            Application.job_id == job.id,
+            Application.status == ApplicationStatus.ACCEPTED,
+        )
+    ) or 0
+
+    if accepted_count == 0:
+        await callback.answer("Немає прийнятих працівників для розсилки.", show_alert=True)
+        return
+
+    await state.update_data(broadcast_job_id=job_id_str)
+    await _safe_edit(
+        callback.message,
+        f"📢 <b>Розсилка по вакансії</b>\n\n"
+        f"📍 {job.city} — {job.pay_description}\n"
+        f"👥 Отримають повідомлення: <b>{accepted_count} працівників</b>\n\n"
+        "Введіть текст повідомлення:",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="❌ Скасувати", callback_data="employer:my_jobs"),
+        ]]),
+    )
+    await state.set_state(BroadcastFSM.waiting_message)
+    await callback.answer()
+
+
+async def broadcast_send(
+    message: types.Message,
+    state: FSMContext,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
+    data = await state.get_data()
+    job_id = _parse_uuid(data["broadcast_job_id"])
+    await state.clear()
+
+    result = await session.execute(
+        select(Application.worker_telegram_id).where(
+            Application.job_id == job_id,
+            Application.status == ApplicationStatus.ACCEPTED,
+        )
+    )
+    worker_ids = [row[0] for row in result.all()]
+
+    job = await session.get(Job, job_id)
+    header = f"📢 <b>Повідомлення від роботодавця</b>\n📍 {job.city} — {job.pay_description}\n\n"
+
+    sent = 0
+    failed = 0
+    for worker_id in worker_ids:
+        try:
+            await bot.send_message(chat_id=worker_id, text=header + message.text)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    summary = f"✅ Розсилку надіслано!\n\n📨 Доставлено: {sent}"
+    if failed:
+        summary += f"\n⚠️ Не доставлено: {failed} (заблокували бота)"
+
+    await message.answer(
+        summary,
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="◀️ Меню", callback_data="employer:panel"),
+        ]]),
+    )
+
+
+# ── Labor settings ────────────────────────────────────────────────────────────
+
+LABOR_WELCOME = "labor_welcome"
+LABOR_CONTACT = "labor_contact"
+
+
+class LaborSettingsFSM(StatesGroup):
+    welcome_text = State()
+    contact_text = State()
+
+
+async def show_settings(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    welcome = await get_cfg(session, registered_bot_id, LABOR_WELCOME, "")
+    contact = await get_cfg(session, registered_bot_id, LABOR_CONTACT, "")
+    welcome_preview = (welcome[:60] + "…") if len(welcome) > 60 else (welcome or "<i>не вказано</i>")
+    contact_preview = (contact[:60] + "…") if len(contact) > 60 else (contact or "<i>не вказано</i>")
+    await _safe_edit(
+        callback.message,
+        f"⚙️ <b>Налаштування бота</b>\n\n"
+        f"👋 <b>Вітальний текст:</b>\n{welcome_preview}\n\n"
+        f"📞 <b>Контакти:</b>\n{contact_preview}",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="✏️ Змінити вітальний текст", callback_data="settings:welcome")],
+            [types.InlineKeyboardButton(text="📞 Змінити контакти",        callback_data="settings:contact")],
+            [types.InlineKeyboardButton(text="◀️ Меню",                    callback_data="employer:panel")],
+        ]),
+    )
+    await callback.answer()
+
+
+async def settings_set_welcome(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await _safe_edit(
+        callback.message,
+        "✏️ Введіть новий вітальний текст для працівників.\n\n"
+        "<i>Підтримується HTML: &lt;b&gt;жирний&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;</i>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="❌ Скасувати", callback_data="employer:settings")
+        ]]),
+    )
+    await state.set_state(LaborSettingsFSM.welcome_text)
+    await callback.answer()
+
+
+async def settings_got_welcome(
+    message: types.Message, state: FSMContext,
+    session: AsyncSession, registered_bot_id: int,
+) -> None:
+    await set_cfg(session, registered_bot_id, LABOR_WELCOME, message.text.strip())
+    await state.clear()
+    await message.answer(
+        "✅ Вітальний текст оновлено!",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="◀️ Налаштування", callback_data="employer:settings")
+        ]]),
+    )
+
+
+async def settings_set_contact(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await _safe_edit(
+        callback.message,
+        "📞 Введіть контактну інформацію для працівників.\n\n"
+        "<i>Наприклад: номер телефону, посилання на Telegram, або будь-який текст.</i>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="❌ Скасувати", callback_data="employer:settings")
+        ]]),
+    )
+    await state.set_state(LaborSettingsFSM.contact_text)
+    await callback.answer()
+
+
+async def settings_got_contact(
+    message: types.Message, state: FSMContext,
+    session: AsyncSession, registered_bot_id: int,
+) -> None:
+    await set_cfg(session, registered_bot_id, LABOR_CONTACT, message.text.strip())
+    await state.clear()
+    await message.answer(
+        "✅ Контакти оновлено!",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="◀️ Налаштування", callback_data="employer:settings")
+        ]]),
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -843,6 +1121,17 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(active_workers,    F.data == "employer:active_workers")
     dp.callback_query.register(blocked_list,      F.data == "employer:blocked")
 
+    # Broadcast
+    dp.callback_query.register(broadcast_start, F.data.regexp(r"^job:[^:]+:broadcast$"))
+    dp.message.register(broadcast_send,         BroadcastFSM.waiting_message)
+
+    # Labor settings
+    dp.callback_query.register(show_settings,       F.data == "employer:settings")
+    dp.callback_query.register(settings_set_welcome, F.data == "settings:welcome")
+    dp.callback_query.register(settings_set_contact, F.data == "settings:contact")
+    dp.message.register(settings_got_welcome,       LaborSettingsFSM.welcome_text)
+    dp.message.register(settings_got_contact,       LaborSettingsFSM.contact_text)
+
     # Create job FSM
     dp.callback_query.register(start_create_job,  F.data == "role:employer")
     dp.callback_query.register(got_job_type,      F.data.startswith("jtype:"),    CreateJobFSM.job_type)
@@ -867,6 +1156,8 @@ def register(dp: Dispatcher) -> None:
 
     # Applications
     dp.callback_query.register(accept_application, F.data.regexp(r"^app:\d+:accept$"))
+    dp.callback_query.register(accept_cancel,      F.data == "accept:cancel",          AcceptDetailsFSM.waiting_details)
+    dp.message.register(got_acceptance_details,    AcceptDetailsFSM.waiting_details)
     dp.callback_query.register(reject_application, F.data.regexp(r"^app:\d+:reject$"))
 
     # Block

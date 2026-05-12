@@ -40,7 +40,7 @@ async def _get_dispatcher() -> Dispatcher:
     redis = await get_redis()
     storage = RedisStorage(
         redis=redis,
-        key_builder=DefaultKeyBuilder(prefix="arete_fsm", with_bot_id=True),
+        key_builder=DefaultKeyBuilder(prefix="masterlug_fsm", with_bot_id=True),
     )
 
     dp = Dispatcher(storage=storage)

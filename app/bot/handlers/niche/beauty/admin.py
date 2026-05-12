@@ -79,6 +79,9 @@ def _admin_menu_markup() -> types.InlineKeyboardMarkup:
                 types.InlineKeyboardButton(text="📣 Розсилка",        callback_data="tt_adm:broadcast"),
                 types.InlineKeyboardButton(text="⚙️ Налаштування",    callback_data="tt_adm:settings"),
             ],
+            [
+                types.InlineKeyboardButton(text="📊 Статистика",      callback_data="tt_adm:stats"),
+            ],
         ]
     )
 
@@ -124,6 +127,54 @@ async def admin_menu_callback(
         await _broadcast_start(msg, state)
     elif action == "settings":
         await _settings_menu(msg, session, registered_bot_id)
+    elif action == "stats":
+        await _admin_stats(msg, session, registered_bot_id)
+
+
+# ── Stats ─────────────────────────────────────────────────────────────────────
+
+async def _admin_stats(message: types.Message, session: AsyncSession, bot_id: int) -> None:
+    subscribers = (await session.execute(
+        select(func.count(BotSubscription.id)).where(BotSubscription.bot_id == bot_id)
+    )).scalar_one()
+
+    portfolio_count = (await session.execute(
+        select(func.count(TattooPortfolio.id)).where(TattooPortfolio.bot_id == bot_id)
+    )).scalar_one()
+
+    total_views = (await session.execute(
+        select(func.sum(TattooPortfolio.view_count)).where(TattooPortfolio.bot_id == bot_id)
+    )).scalar_one() or 0
+
+    total_bookings = (await session.execute(
+        select(func.count(TattooBooking.id)).where(TattooBooking.bot_id == bot_id)
+    )).scalar_one()
+
+    active_bookings = (await session.execute(
+        select(func.count(TattooBooking.id)).where(
+            TattooBooking.bot_id == bot_id,
+            TattooBooking.status == BookingStatus.NEW,
+        )
+    )).scalar_one()
+
+    approved_reviews = (await session.execute(
+        select(func.count(TattooReview.id)).where(
+            TattooReview.bot_id == bot_id,
+            TattooReview.status == ReviewStatus.APPROVED,
+        )
+    )).scalar_one()
+
+    await _safe_edit(
+        message,
+        f"📊 <b>Статистика студії</b>\n\n"
+        f"👥 Підписників: <b>{subscribers}</b>\n\n"
+        f"🖼 Портфоліо: <b>{portfolio_count}</b> робіт\n"
+        f"👁 Переглядів усього: <b>{total_views}</b>\n\n"
+        f"📅 Записів усього: <b>{total_bookings}</b>\n"
+        f"✅ Активних: <b>{active_bookings}</b>\n\n"
+        f"⭐️ Відгуків схвалено: <b>{approved_reviews}</b>",
+        reply_markup=_back_menu_kb(),
+    )
 
 
 # ── Settings menu ─────────────────────────────────────────────────────────────
@@ -433,7 +484,8 @@ async def admin_portfolio_browse(
     label = next((c["name"] for c in cats if c["key"] == style_key), style_key)
     caption = (
         f"🎨 <b>{label}</b> [{idx + 1}/{len(works)}]\n\n"
-        f"📝 {work.description}\n⏱ {work.work_time}\n💰 {work.price}"
+        f"📝 {work.description}\n⏱ {work.work_time}\n💰 {work.price}\n"
+        f"👁 Переглядів: {work.view_count or 0}"
     )
     nav = []
     if idx > 0:

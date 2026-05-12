@@ -21,8 +21,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application source
 COPY --chown=arete:arete . .
 
+RUN chmod +x scripts/start.sh
+
 USER arete
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["scripts/start.sh"]

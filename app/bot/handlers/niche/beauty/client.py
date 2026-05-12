@@ -19,7 +19,7 @@ from app.bot.handlers.niche.beauty.config import (
 )
 from app.bot.handlers.niche.beauty.calendar_widget import make_calendar
 from app.services.config_service import (
-    CATEGORIES, SOCIAL_TEXT, TIME_SLOTS, WELCOME_TEXT, get_cfg, get_json,
+    CATEGORIES, SOCIAL_TEXT, TIME_SLOTS, WELCOME_TEXT, get_cfg, get_json, is_demo_bot,
 )
 
 logger = logging.getLogger(__name__)
@@ -185,6 +185,8 @@ async def _show_portfolio_page(
 
     idx = max(0, min(idx, len(works) - 1))
     work = works[idx]
+    work.view_count = (work.view_count or 0) + 1
+    await session.commit()
     caption = (
         f"🎨 <b>{cat_name}</b>  [{idx + 1}/{len(works)}]\n\n"
         f"📝 {work.description}\n⏱ Час: {work.work_time}\n💰 Ціна: {work.price}"
@@ -234,10 +236,14 @@ async def portfolio_want(
 
     user = callback.from_user
     mention = f"@{user.username}" if user.username else user.full_name
+    demo = is_demo_bot(work.bot_id)
+    notify_id = user.id if demo else owner_telegram_id
+    prefix = "📬 <b>Так виглядає повідомлення майстру:</b>\n\n" if demo else ""
     try:
         await bot.send_message(
-            chat_id=owner_telegram_id,
+            chat_id=notify_id,
             text=(
+                f"{prefix}"
                 f"🔥 <b>Клієнт зацікавився роботою!</b>\n\n"
                 f"👤 {mention} (ID: {user.id})\n"
                 f"🎨 {cat_name}\n📝 {work.description}\n💰 {work.price}"
@@ -381,10 +387,14 @@ async def booking_got_contact(
             cats = await _categories(session, registered_bot_id)
             cat_name = next((c["name"] for c in cats if c["key"] == work.style), work.style)
             ref_text = f"\n🖼 Референс: {cat_name} — {work.description}"
+    demo = is_demo_bot(registered_bot_id)
+    notify_id = user.id if demo else owner_telegram_id
+    prefix = "📬 <b>Так виглядає повідомлення майстру:</b>\n\n" if demo else ""
     try:
         await bot.send_message(
-            chat_id=owner_telegram_id,
+            chat_id=notify_id,
             text=(
+                f"{prefix}"
                 f"📅 <b>Новий запис!</b>\n\n👤 {mention} ({phone})\n"
                 f"📅 {d.strftime('%d.%m.%Y')} о {data['time_slot']}\n"
                 f"💡 {data['idea']}\n📍 {data['body_part']} | 📐 {data['size']}{ref_text}"

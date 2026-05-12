@@ -14,6 +14,12 @@ CATEGORIES   = "categories"    # JSON list: [{"key": "realism", "name": "🖤 Р
 WELCOME_TEXT = "welcome_text"
 
 
+def is_demo_bot(bot_id: int) -> bool:
+    from app.core.config import settings
+    demo_ids = {settings.DEMO_BOT_LABOR_ID, settings.DEMO_BOT_BEAUTY_ID} - {0}
+    return bool(demo_ids and bot_id in demo_ids)
+
+
 async def get_cfg(session: AsyncSession, bot_id: int, key: str, default: str | None = None) -> str | None:
     result = await session.execute(
         select(BotConfig.value).where(BotConfig.bot_id == bot_id, BotConfig.key == key)

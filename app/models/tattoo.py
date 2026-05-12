@@ -44,6 +44,7 @@ class TattooPortfolio(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     work_time: Mapped[str] = mapped_column(String(128), nullable=False)
     price: Mapped[str] = mapped_column(String(128), nullable=False)
+    view_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

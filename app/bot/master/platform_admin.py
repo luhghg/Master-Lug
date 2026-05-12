@@ -39,18 +39,6 @@ async def owner_start(message: types.Message) -> None:
     await _show_panel(message)
 
 
-async def _show_panel(message: types.Message) -> None:
-    await message.answer(
-        "🛠 <b>Arete — Панель власника платформи</b>",
-        reply_markup=types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [types.InlineKeyboardButton(text="🤖 Всі боти",        callback_data="pa:bots:0")],
-                [types.InlineKeyboardButton(text="📊 Загальна аналітика", callback_data="pa:stats")],
-            ]
-        ),
-    )
-
-
 # ── Bot list (paginated, 10 per page) ─────────────────────────────────────────
 
 async def pa_bots(
@@ -148,6 +136,7 @@ async def pa_bot_detail(
 
     await callback.message.edit_text(
         f"🤖 <b>@{bot.bot_username}</b>\n\n"
+        f"🆔 Bot ID (для .env): <code>{bot.id}</code>\n"
         f"📦 Ніша: {NICHE_EMOJI.get(bot.niche, '')} {bot.niche.value}\n"
         f"👤 Owner ID: <code>{bot.owner_telegram_id}</code>\n"
         f"📅 Зареєстровано: {bot.created_at.strftime('%d.%m.%Y %H:%M')}\n"
@@ -213,7 +202,7 @@ async def pa_stats(
     ) or "  —"
 
     await callback.message.edit_text(
-        f"📊 <b>Arete — Загальна аналітика</b>\n\n"
+        f"📊 <b>MasterLug — Загальна аналітика</b>\n\n"
         f"🤖 Ботів всього: <b>{total_bots}</b> (активних: {active_bots})\n\n"
         f"По нішах:\n{niche_lines}\n\n"
         f"📅 Записів (Beauty): <b>{total_bookings}</b> (активних: {active_bookings})\n"
@@ -322,7 +311,7 @@ async def wl_remove(callback: types.CallbackQuery, session: AsyncSession) -> Non
 
 async def pa_home(callback: types.CallbackQuery) -> None:
     await callback.message.edit_text(
-        "🛠 <b>Arete — Панель власника платформи</b>",
+        "🛠 <b>MasterLug — Панель власника платформи</b>",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="🤖 Всі боти",           callback_data="pa:bots:0")],
             [types.InlineKeyboardButton(text="📊 Загальна аналітика", callback_data="pa:stats")],
@@ -334,7 +323,7 @@ async def pa_home(callback: types.CallbackQuery) -> None:
 
 async def _show_panel(message: types.Message) -> None:
     await message.answer(
-        "🛠 <b>Arete — Панель власника платформи</b>",
+        "🛠 <b>MasterLug — Панель власника платформи</b>",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="🤖 Всі боти",           callback_data="pa:bots:0")],
             [types.InlineKeyboardButton(text="📊 Загальна аналітика", callback_data="pa:stats")],

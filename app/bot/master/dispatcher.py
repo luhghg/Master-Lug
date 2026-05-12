@@ -35,7 +35,7 @@ async def get_master_dispatcher() -> Dispatcher:
     redis = await get_redis()
     storage = RedisStorage(
         redis=redis,
-        key_builder=DefaultKeyBuilder(prefix="arete_master"),
+        key_builder=DefaultKeyBuilder(prefix="masterlug_master"),
     )
 
     dp = Dispatcher(storage=storage)
