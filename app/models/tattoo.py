@@ -45,6 +45,7 @@ class TattooPortfolio(Base):
     work_time: Mapped[str] = mapped_column(String(128), nullable=False)
     price: Mapped[str] = mapped_column(String(128), nullable=False)
     view_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    demo_owner_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -94,6 +95,23 @@ class TattooBooking(Base):
         Enum(BookingStatus), default=BookingStatus.NEW, nullable=False
     )
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class TattooService(Base):
+    """Services offered by a Beauty bot (e.g. manicure, tattoo, etc.)."""
+    __tablename__ = "tattoo_services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("registered_bots.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    price: Mapped[str] = mapped_column(String(64), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

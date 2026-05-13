@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tattoo import (
     BookingStatus, ReviewStatus,
-    TattooBooking, TattooPortfolio, TattooReview,
+    TattooBooking, TattooPortfolio, TattooReview, TattooService,
 )
 from app.bot.handlers.niche.beauty.config import (
     MAX_TEXT_LEN, SOCIAL_TEXT as DEFAULT_SOCIAL,
@@ -76,6 +76,7 @@ def _menu_markup() -> types.InlineKeyboardMarkup:
          types.InlineKeyboardButton(text="📅 Записатись", callback_data="tt_menu:booking")],
         [types.InlineKeyboardButton(text="⭐️ Відгуки",   callback_data="tt_menu:reviews"),
          types.InlineKeyboardButton(text="📱 Соцмережі",  callback_data="tt_menu:social")],
+        [types.InlineKeyboardButton(text="💰 Послуги",    callback_data="tt_menu:services")],
     ])
 
 
@@ -133,6 +134,9 @@ async def menu_callback(
         social_text = await _social(session, registered_bot_id)
         await _safe_edit(msg, social_text, reply_markup=_home_kb())
 
+    elif action == "services":
+        await _show_services(msg, session, registered_bot_id)
+
 
 # ── Portfolio ─────────────────────────────────────────────────────────────────
 
@@ -173,9 +177,12 @@ async def _show_portfolio_page(
     cats = await _categories(session, bot_id)
     cat_name = next((c["name"] for c in cats if c["key"] == style_key), style_key)
 
+    base_filter = [TattooPortfolio.bot_id == bot_id, TattooPortfolio.style == style_key]
+    if is_demo_bot(bot_id):
+        base_filter.append(TattooPortfolio.demo_owner_id.is_(None))
     result = await session.execute(
         select(TattooPortfolio)
-        .where(TattooPortfolio.bot_id == bot_id, TattooPortfolio.style == style_key)
+        .where(*base_filter)
         .order_by(TattooPortfolio.created_at)
     )
     works = list(result.scalars().all())
@@ -376,7 +383,17 @@ async def booking_got_contact(
         f"✅ <b>Запис підтверджено!</b>\n\n📅 {d.strftime('%d.%m.%Y')} о {data['time_slot']}\n\nМайстер зв'яжеться з вами. Дякуємо! 🙏",
         reply_markup=types.ReplyKeyboardRemove(),
     )
-    await message.answer("Чим іще можу допомогти?", reply_markup=_home_kb())
+    # Feature 6: Show repeat booking option
+    await message.answer(
+        "Чим іще можу допомогти?",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="🔁 Записатись знову",
+                callback_data=f"tt_repeat:{booking.id}",
+            )],
+            [types.InlineKeyboardButton(text="🏠 Меню", callback_data="tt_menu:home")],
+        ]),
+    )
 
     user = message.from_user
     mention = f"@{user.username}" if user.username else user.full_name
@@ -548,6 +565,61 @@ async def review_cancel(callback: types.CallbackQuery, state: FSMContext) -> Non
     await callback.answer()
 
 
+# ── Services (client view) ────────────────────────────────────────────────────
+
+async def _show_services(message: types.Message, session: AsyncSession, bot_id: int) -> None:
+    result = await session.execute(
+        select(TattooService)
+        .where(TattooService.bot_id == bot_id)
+        .order_by(TattooService.position, TattooService.created_at)
+    )
+    services = list(result.scalars().all())
+    if not services:
+        await _safe_edit(message, "Послуг ще немає", reply_markup=_home_kb())
+        return
+
+    lines = "\n".join(f"🔸 {svc.name} — {svc.price}" for svc in services)
+    await _safe_edit(
+        message,
+        f"📋 <b>Послуги:</b>\n\n{lines}",
+        reply_markup=_home_kb(),
+    )
+
+
+# ── Repeat booking ────────────────────────────────────────────────────────────
+
+async def booking_repeat(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    booking_id = int(callback.data.split(":")[1])
+    booking = await session.get(TattooBooking, booking_id)
+
+    if not booking or booking.bot_id != registered_bot_id:
+        await callback.answer("❌ Запис не знайдено", show_alert=True)
+        return
+
+    await state.update_data(
+        idea=booking.idea,
+        body_part=booking.body_part,
+        size=booking.size,
+        reference_id=booking.reference_id,
+    )
+
+    today = date.today()
+    await callback.message.answer(
+        f"🔁 <b>Повторний запис</b>\n\n"
+        f"💡 Ідея: {booking.idea}\n"
+        f"📍 {booking.body_part} | 📐 {booking.size}\n\n"
+        "Оберіть нову дату:",
+        reply_markup=make_calendar(today.year, today.month, "tt_b_nav", "tt_b_day"),
+    )
+    await state.set_state(BookingFSM.pick_date)
+    await callback.answer()
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _valid_text(text: str | None) -> bool:
@@ -613,4 +685,5 @@ def register(dp: Dispatcher) -> None:
     dp.message.register(review_got_photo,             ReviewFSM.photo, F.photo)
     dp.callback_query.register(review_skip_photo,     F.data == "tt_review:skip_photo", ReviewFSM.photo)
     dp.callback_query.register(review_cancel,         F.data == "tt_booking_cancel",    ReviewFSM.text)
+    dp.callback_query.register(booking_repeat,        F.data.startswith("tt_repeat:"))
     dp.callback_query.register(lambda c: c.answer(),  F.data == "tt_ignore")

@@ -1,13 +1,14 @@
 import logging
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramUnauthorizedError
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import app_state
@@ -179,7 +180,7 @@ async def land_pricing(callback: types.CallbackQuery) -> None:
         "✅ Оновлення безкоштовно\n"
         "✅ Ваш особистий Telegram-бот\n\n"
         "🎁 <b>Перший місяць — безкоштовно</b>\n"
-        "<i>(для перших 10 клієнтів)</i>",
+        "<i>(для перших 3 клієнтів)</i>",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [_back_btn(), _connect_btn()],
         ]),
@@ -189,8 +190,28 @@ async def land_pricing(callback: types.CallbackQuery) -> None:
 
 # ── /start ────────────────────────────────────────────────────────────────────
 
-async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSession) -> None:
+async def cmd_start(
+    message: types.Message,
+    state: FSMContext,
+    session: AsyncSession,
+    command: CommandObject = None,
+) -> None:
+    # Parse referral before clearing state
+    args = (command.args or "") if command else ""
+    referrer_id = None
+    if args.startswith("ref_"):
+        try:
+            rid = int(args[4:])
+            if rid != message.from_user.id:
+                referrer_id = rid
+        except ValueError:
+            pass
+
     await state.clear()
+
+    if referrer_id:
+        await state.update_data(referrer_id=referrer_id)
+
     user_id = message.from_user.id
 
     if user_id != settings.PLATFORM_OWNER_ID:
@@ -201,6 +222,19 @@ async def cmd_start(message: types.Message, state: FSMContext, session: AsyncSes
             await message.answer(_landing_home_text(), reply_markup=_landing_home_kb())
             return
 
+    # If user already has bots → show profile + option to add more
+    existing = await session.execute(
+        select(RegisteredBot).where(RegisteredBot.owner_telegram_id == user_id)
+    )
+    bots = list(existing.scalars().all())
+    if bots:
+        await _show_my_bots(message, bots, user_id)
+        return
+
+    await _show_niche_selector(message, state)
+
+
+async def _show_niche_selector(message: types.Message, state: FSMContext) -> None:
     await message.answer(
         "👋 <b>Ласкаво просимо до MasterLug!</b>\n\n"
         "Я допоможу вам створити власного Telegram-бота для вашого бізнесу за 2 хвилини.\n\n"
@@ -312,10 +346,12 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
         await message.answer("❌ Не вдалося перевірити токен. Спробуйте ще раз.")
         return
 
-    data = await state.get_data()
-    niche = BotNiche(data["niche"])
+    # Get FSM data (including referrer_id) BEFORE clearing state
+    fsm_data = await state.get_data()
+    niche = BotNiche(fsm_data["niche"])
+    referrer_id = fsm_data.get("referrer_id")
 
-    await register_bot(
+    registered, is_trial = await register_bot(
         session,
         owner_telegram_id=message.from_user.id,
         plain_token=plain_token,
@@ -349,13 +385,344 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
         return
 
     await state.clear()
+    if is_trial:
+        await message.answer(
+            f"🎉 <b>Ваш бот готовий!</b>\n\n"
+            f"🤖 @{bot_info.username}\n"
+            f"📦 Ніша: {NICHE_LABELS[niche]}\n\n"
+            f"👉 Відкрийте та протестуйте: t.me/{bot_info.username}\n\n"
+            f"🎁 <b>Перший місяць — безкоштовно!</b>\n"
+            f"Після 30 днів підписка коштує {settings.SUBSCRIPTION_PRICE} грн/міс.\n"
+            f"Ми нагадаємо за тиждень до кінця.",
+        )
+    else:
+        card = settings.MONOBANK_CARD or "уточніть у підтримці"
+        await message.answer(
+            f"✅ <b>Бот @{bot_info.username} зареєстровано!</b>\n\n"
+            f"📦 Ніша: {NICHE_LABELS[niche]}\n\n"
+            f"⏳ <b>Для активації необхідна оплата</b>\n"
+            f"Вартість: <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n\n"
+            f"💳 Monobank: <code>{card}</code>\n"
+            f"📝 Призначення: <code>MasterLug @{bot_info.username}</code>\n\n"
+            f"Після оплати напишіть нам — активуємо протягом кількох годин.",
+        )
+
+    # Feature 3: Send step-by-step onboarding guide
+    support_line = ""
+    if settings.SUPPORT_USERNAME:
+        support_line = f"\n\n<i>Є питання? Пишіть у підтримку @{settings.SUPPORT_USERNAME}</i>"
+
+    if niche == BotNiche.LABOR:
+        guide_text = (
+            "📋 <b>Покрокова інструкція для старту:</b>\n\n"
+            f"1️⃣ Відкрийте @{bot_info.username} → /start → <b>Панель роботодавця</b>\n"
+            f"2️⃣ Натисніть <b>➕ Нова вакансія</b> — заповніть місто, опис, оплату, час і адресу\n"
+            f"3️⃣ Поділіться посиланням з кандидатами: <code>t.me/{bot_info.username}</code>\n"
+            "4️⃣ Кандидати відгукуються → ви приймаєте одним кліком"
+            f"{support_line}"
+        )
+    elif niche == BotNiche.BEAUTY:
+        guide_text = (
+            "📋 <b>Покрокова інструкція для старту:</b>\n\n"
+            f"1️⃣ Відкрийте @{bot_info.username} → /start → <b>Адмін-панель</b>\n"
+            "   ⚙️ Налаштування → 👋 Привітання — введіть свій текст\n"
+            "2️⃣ Натисніть <b>➕ Додати роботу</b> — завантажте фото з описом і ціною\n"
+            "3️⃣ ⚙️ → 🕐 Час роботи — налаштуйте слоти (10:00, 12:00...)\n"
+            f"4️⃣ Поділіться посиланням: <code>t.me/{bot_info.username}</code>\n\n"
+            "<i>Клієнти записуватимуться самі — вам тільки підтверджувати!</i>"
+        )
+    else:
+        guide_text = None
+
+    if guide_text:
+        await message.answer(guide_text)
+
+    # Notify platform owner about new registration
+    if settings.PLATFORM_OWNER_ID:
+        try:
+            from app.bot.master.dispatcher import get_master_bot
+            master_bot = await get_master_bot()
+            await master_bot.send_message(
+                chat_id=settings.PLATFORM_OWNER_ID,
+                text=(
+                    f"🆕 <b>Новий бот зареєстровано!</b>\n\n"
+                    f"🤖 @{bot_info.username}\n"
+                    f"📦 Ніша: {NICHE_LABELS[niche]}\n"
+                    f"👤 Owner ID: <code>{message.from_user.id}</code>\n"
+                    f"👤 @{message.from_user.username or '—'} / {message.from_user.full_name}"
+                ),
+            )
+        except Exception:
+            pass
+
+    # Feature 8: Referral bonus
+    if referrer_id:
+        from app.core.database import AsyncSessionLocal
+        from datetime import timedelta
+        async with AsyncSessionLocal() as ref_session:
+            ref_bots_res = await ref_session.execute(
+                select(RegisteredBot).where(
+                    RegisteredBot.owner_telegram_id == referrer_id
+                ).limit(1)
+            )
+            ref_bot = ref_bots_res.scalar_one_or_none()
+            if ref_bot:
+                now_utc = datetime.now(timezone.utc)
+                base = max(ref_bot.subscription_expires_at or now_utc, now_utc)
+                ref_bot.subscription_expires_at = base + timedelta(days=30)
+                await ref_session.commit()
+                try:
+                    from app.bot.master.dispatcher import get_master_bot
+                    master_bot = await get_master_bot()
+                    await master_bot.send_message(
+                        chat_id=referrer_id,
+                        text="🎁 <b>Ваш друг зареєструвався!</b>\n\nВам нараховано +30 днів до підписки.",
+                    )
+                except Exception:
+                    pass
+
+
+# ── My Profile ───────────────────────────────────────────────────────────────
+
+NICHE_EMOJI = {
+    BotNiche.LABOR:  "💼",
+    BotNiche.BEAUTY: "💅",
+    BotNiche.SPORTS: "🏋️",
+}
+
+
+def _sub_status(bot: RegisteredBot) -> str:
+    if not bot.is_active:
+        return "🔴 Вимкнений"
+    if bot.subscription_expires_at is None:
+        return "🟢 Активний"
+    now = datetime.now(timezone.utc)
+    if bot.subscription_expires_at <= now:
+        return "🔴 Підписка прострочена"
+    days = (bot.subscription_expires_at - now).days
+    date_str = bot.subscription_expires_at.strftime("%d.%m.%Y")
+    if days <= 7:
+        return f"⚠️ до {date_str} ({days} дн.)"
+    return f"🟢 до {date_str}"
+
+
+async def _show_my_bots(message: types.Message, bots: list, user_id: int = 0) -> None:
+    rows = []
+    for bot in bots:
+        emoji = NICHE_EMOJI.get(bot.niche, "🤖")
+        status = _sub_status(bot)
+        rows.append([types.InlineKeyboardButton(
+            text=f"{emoji} @{bot.bot_username} — {status}",
+            callback_data=f"profile:bot:{bot.id}",
+        )])
+    rows.append([types.InlineKeyboardButton(text="➕ Додати ще бота", callback_data="profile:new")])
+
+    # Feature 8: Referral button
+    if app_state.master_bot_username and user_id:
+        ref_link = f"https://t.me/{app_state.master_bot_username}?start=ref_{user_id}"
+        rows.append([types.InlineKeyboardButton(
+            text="📤 Запросити друга → +30 днів",
+            url=ref_link,
+        )])
+
+    # Feature 2: Support button
+    if settings.SUPPORT_USERNAME:
+        rows.append([types.InlineKeyboardButton(
+            text="💬 Підтримка",
+            url=f"https://t.me/{settings.SUPPORT_USERNAME}",
+        )])
+
     await message.answer(
-        f"🎉 <b>Ваш бот готовий!</b>\n\n"
-        f"🤖 @{bot_info.username}\n"
-        f"📦 Ніша: {NICHE_LABELS[niche]}\n\n"
-        f"👉 Відкрийте та протестуйте: t.me/{bot_info.username}\n\n"
-        "Ваші клієнти можуть користуватись ботом прямо зараз!",
+        "👤 <b>Мій профіль</b>\n\nВаші боти:",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
     )
+
+
+async def profile_home(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    bots_res = await session.execute(
+        select(RegisteredBot).where(RegisteredBot.owner_telegram_id == callback.from_user.id)
+    )
+    bots = list(bots_res.scalars().all())
+    if not bots:
+        await _safe_edit(callback.message, "У вас ще немає ботів.")
+        await callback.answer()
+        return
+
+    rows = []
+    for bot in bots:
+        emoji = NICHE_EMOJI.get(bot.niche, "🤖")
+        status = _sub_status(bot)
+        rows.append([types.InlineKeyboardButton(
+            text=f"{emoji} @{bot.bot_username} — {status}",
+            callback_data=f"profile:bot:{bot.id}",
+        )])
+    rows.append([types.InlineKeyboardButton(text="➕ Додати ще бота", callback_data="profile:new")])
+
+    # Feature 8: Referral button
+    user_id = callback.from_user.id
+    if app_state.master_bot_username:
+        ref_link = f"https://t.me/{app_state.master_bot_username}?start=ref_{user_id}"
+        rows.append([types.InlineKeyboardButton(
+            text="📤 Запросити друга → +30 днів",
+            url=ref_link,
+        )])
+
+    # Feature 2: Support button
+    if settings.SUPPORT_USERNAME:
+        rows.append([types.InlineKeyboardButton(
+            text="💬 Підтримка",
+            url=f"https://t.me/{settings.SUPPORT_USERNAME}",
+        )])
+
+    await _safe_edit(
+        callback.message,
+        "👤 <b>Мій профіль</b>\n\nВаші боти:",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+async def profile_bot_detail(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    bot_id = int(callback.data.split(":")[2])
+    bot = await session.get(RegisteredBot, bot_id)
+
+    if not bot or bot.owner_telegram_id != callback.from_user.id:
+        await callback.answer("Бот не знайдено", show_alert=True)
+        return
+
+    now = datetime.now(timezone.utc)
+    emoji = NICHE_EMOJI.get(bot.niche, "🤖")
+
+    sub_valid = bot.is_active and (
+        bot.subscription_expires_at is None or bot.subscription_expires_at > now
+    )
+
+    if not bot.is_active:
+        sub_line = "🔴 <b>Вимкнений / не оплачено</b>"
+    elif bot.subscription_expires_at is None:
+        sub_line = "🟢 <b>Активний</b>"
+    elif bot.subscription_expires_at <= now:
+        sub_line = f"🔴 <b>Підписка прострочена</b> ({bot.subscription_expires_at.strftime('%d.%m.%Y')})"
+    else:
+        days = (bot.subscription_expires_at - now).days
+        date_str = bot.subscription_expires_at.strftime("%d.%m.%Y")
+        sub_line = f"🟢 <b>Активний до {date_str}</b> ({days} дн.)"
+
+    # Feature 7: Query stats
+    from datetime import date
+    from app.models.tattoo import BotSubscription, TattooBooking
+    from app.models.job import Job
+
+    first_of_month = datetime(date.today().year, date.today().month, 1, tzinfo=timezone.utc)
+
+    subs = (await session.scalar(
+        select(func.count(BotSubscription.id)).where(BotSubscription.bot_id == bot_id)
+    )) or 0
+
+    if bot.niche.value == "BEAUTY":
+        month_stat = (await session.scalar(
+            select(func.count(TattooBooking.id)).where(
+                TattooBooking.bot_id == bot_id,
+                TattooBooking.created_at >= first_of_month,
+            )
+        )) or 0
+        stat_line = f"📅 Записів цього місяця: <b>{month_stat}</b>"
+    elif bot.niche.value == "LABOR":
+        month_stat = (await session.scalar(
+            select(func.count(Job.id)).where(
+                Job.bot_id == bot_id,
+                Job.created_at >= first_of_month,
+            )
+        )) or 0
+        stat_line = f"📋 Вакансій цього місяця: <b>{month_stat}</b>"
+    else:
+        stat_line = ""
+
+    text = (
+        f"{emoji} <b>@{bot.bot_username}</b>\n\n"
+        f"📦 Ніша: {NICHE_LABELS[bot.niche]}\n"
+        f"📅 Зареєстровано: {bot.created_at.strftime('%d.%m.%Y')}\n"
+        f"💳 Підписка: {sub_line}\n"
+        f"\n👥 Підписників: <b>{subs}</b>\n{stat_line}"
+    )
+
+    # Show payment instructions if not active or expiring soon
+    needs_payment = (
+        not bot.is_active
+        or bot.subscription_expires_at is None and not bot.is_active
+        or (bot.subscription_expires_at and (bot.subscription_expires_at - now).days <= 7)
+    )
+    if needs_payment and settings.MONOBANK_CARD:
+        card = settings.MONOBANK_CARD
+        text += (
+            f"\n\n💳 <b>Оплата підписки:</b> {settings.SUBSCRIPTION_PRICE} грн/міс\n"
+            f"Monobank: <code>{card}</code>\n"
+            f"Призначення: <code>MasterLug @{bot.bot_username}</code>\n\n"
+            f"<i>Після оплати напишіть нам — активуємо вручну.</i>"
+        )
+
+    # Feature 1: Build toggle button
+    kb_rows = []
+    if bot.is_active and sub_valid:
+        kb_rows.append([types.InlineKeyboardButton(
+            text="⏸ Призупинити бот",
+            callback_data=f"profile:pause:{bot_id}",
+        )])
+    elif not bot.is_active:
+        # Only show resume if subscription not expired
+        sub_not_expired = (
+            bot.subscription_expires_at is None
+            or bot.subscription_expires_at > now
+        )
+        if sub_not_expired:
+            kb_rows.append([types.InlineKeyboardButton(
+                text="▶️ Увімкнути бот",
+                callback_data=f"profile:resume:{bot_id}",
+            )])
+
+    kb_rows.append([types.InlineKeyboardButton(text="◀️ Мої боти", callback_data="profile:home")])
+    kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    await _safe_edit(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+async def profile_toggle_bot(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    parts = callback.data.split(":")
+    action = parts[1]  # "pause" or "resume"
+    bot_id = int(parts[2])
+
+    bot = await session.get(RegisteredBot, bot_id)
+    if not bot or bot.owner_telegram_id != callback.from_user.id:
+        await callback.answer("Бот не знайдено", show_alert=True)
+        return
+
+    now = datetime.now(timezone.utc)
+
+    if action == "pause":
+        bot.is_active = False
+        await session.commit()
+        await callback.answer("⏸ Бот призупинено", show_alert=True)
+    elif action == "resume":
+        # Check subscription is still valid
+        sub_valid = (
+            bot.subscription_expires_at is None
+            or bot.subscription_expires_at > now
+        )
+        if not sub_valid:
+            await callback.answer("❌ Підписка прострочена. Оновіть підписку для активації.", show_alert=True)
+            return
+        bot.is_active = True
+        await session.commit()
+        await callback.answer("▶️ Бот увімкнено", show_alert=True)
+
+    # Refresh detail view
+    callback.data = f"profile:bot:{bot_id}"
+    await profile_bot_detail(callback, session)
+
+
+async def profile_new_bot(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await _show_niche_selector(callback.message, state)
 
 
 # ── Whitelist request (from landing) ─────────────────────────────────────────
@@ -423,6 +790,15 @@ def register(dp: Dispatcher) -> None:
         F.from_user.id == settings.PLATFORM_OWNER_ID,
         F.video | F.document,
     )
+
+    # Profile
+    dp.callback_query.register(profile_home,       F.data == "profile:home")
+    dp.callback_query.register(profile_bot_detail, F.data.startswith("profile:bot:"))
+    dp.callback_query.register(profile_new_bot,    F.data == "profile:new")
+
+    # Feature 1: Pause/Resume toggle
+    dp.callback_query.register(profile_toggle_bot, F.data.startswith("profile:pause:"))
+    dp.callback_query.register(profile_toggle_bot, F.data.startswith("profile:resume:"))
 
     # Whitelist
     dp.callback_query.register(whitelist_request, F.data == "wl:request")

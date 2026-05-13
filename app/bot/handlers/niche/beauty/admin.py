@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.handlers.niche.beauty.calendar_widget import make_calendar
@@ -16,11 +16,11 @@ from app.bot.handlers.niche.beauty.config import (
 )
 from app.models.tattoo import (
     BookingStatus, BotSubscription, ReviewStatus,
-    TattooBooking, TattooPortfolio, TattooReview,
+    TattooBooking, TattooPortfolio, TattooReview, TattooService,
 )
 from app.services.config_service import (
     CATEGORIES, SOCIAL_TEXT, TIME_SLOTS, WELCOME_TEXT,
-    get_cfg, get_json, set_cfg, set_json,
+    get_cfg, get_json, is_demo_bot, set_cfg, set_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,18 @@ class CategoryFSM(StatesGroup):
     add_name = State()
 
 
+class EditPortfolioFSM(StatesGroup):
+    description = State()
+    work_time   = State()
+    price       = State()
+    photo       = State()
+
+
+class ServicesFSM(StatesGroup):
+    name  = State()
+    price = State()
+
+
 # ── UI helpers ────────────────────────────────────────────────────────────────
 
 async def _safe_edit(message: types.Message, text: str, **kwargs) -> None:
@@ -81,6 +93,9 @@ def _admin_menu_markup() -> types.InlineKeyboardMarkup:
             ],
             [
                 types.InlineKeyboardButton(text="📊 Статистика",      callback_data="tt_adm:stats"),
+            ],
+            [
+                types.InlineKeyboardButton(text="📋 Послуги",         callback_data="tt_adm:services"),
             ],
         ]
     )
@@ -118,7 +133,7 @@ async def admin_menu_callback(
     elif action == "add_portfolio":
         await _portfolio_add_start(msg, state)
     elif action == "portfolio":
-        await _admin_portfolio_list(msg, session, registered_bot_id)
+        await _admin_portfolio_list(msg, session, registered_bot_id, callback.from_user.id)
     elif action == "schedule":
         await _schedule_show(msg, session, registered_bot_id)
     elif action == "reviews":
@@ -129,6 +144,8 @@ async def admin_menu_callback(
         await _settings_menu(msg, session, registered_bot_id)
     elif action == "stats":
         await _admin_stats(msg, session, registered_bot_id)
+    elif action == "services":
+        await _admin_services_list(msg, session, registered_bot_id)
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
@@ -419,6 +436,7 @@ async def portfolio_got_price(
         description=data["description"],
         work_time=data["work_time"],
         price=message.text.strip(),
+        demo_owner_id=message.from_user.id if is_demo_bot(registered_bot_id) else None,
     )
     session.add(work)
     await session.commit()
@@ -436,10 +454,18 @@ async def portfolio_got_price(
 
 # ── Admin portfolio list with delete ─────────────────────────────────────────
 
-async def _admin_portfolio_list(message: types.Message, session: AsyncSession, bot_id: int) -> None:
+async def _admin_portfolio_list(
+    message: types.Message, session: AsyncSession, bot_id: int, user_id: int = 0,
+) -> None:
+    base_filter = [TattooPortfolio.bot_id == bot_id]
+    if is_demo_bot(bot_id) and user_id:
+        base_filter.append(or_(
+            TattooPortfolio.demo_owner_id.is_(None),
+            TattooPortfolio.demo_owner_id == user_id,
+        ))
     result = await session.execute(
         select(TattooPortfolio.style, func.count(TattooPortfolio.id).label("cnt"))
-        .where(TattooPortfolio.bot_id == bot_id)
+        .where(*base_filter)
         .group_by(TattooPortfolio.style)
     )
     rows = result.all()
@@ -467,9 +493,15 @@ async def admin_portfolio_browse(
 ) -> None:
     _, style_key, idx_str = callback.data.split(":")
     idx = int(idx_str)
+    base_filter = [TattooPortfolio.bot_id == registered_bot_id, TattooPortfolio.style == style_key]
+    if is_demo_bot(registered_bot_id):
+        base_filter.append(or_(
+            TattooPortfolio.demo_owner_id.is_(None),
+            TattooPortfolio.demo_owner_id == callback.from_user.id,
+        ))
     result = await session.execute(
         select(TattooPortfolio)
-        .where(TattooPortfolio.bot_id == registered_bot_id, TattooPortfolio.style == style_key)
+        .where(*base_filter)
         .order_by(TattooPortfolio.created_at)
     )
     works = list(result.scalars().all())
@@ -496,7 +528,10 @@ async def admin_portfolio_browse(
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         nav,
-        [types.InlineKeyboardButton(text="🗑 Видалити цю роботу", callback_data=f"tt_adm_pdel:{work.id}:{style_key}:{idx}")],
+        [
+            types.InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"tt_adm_pedit:{work.id}:{style_key}:{idx}"),
+            types.InlineKeyboardButton(text="🗑 Видалити",   callback_data=f"tt_adm_pdel:{work.id}:{style_key}:{idx}"),
+        ],
         [types.InlineKeyboardButton(text="◀️ Назад", callback_data="tt_adm:portfolio")],
     ])
 
@@ -540,6 +575,142 @@ async def admin_portfolio_delete(
         new_idx = min(idx_str, len(works) - 1)
         callback.data = f"tt_adm_plist:{style_key}:{new_idx}"
         await admin_portfolio_browse(callback, session, registered_bot_id)
+
+
+# ── Edit portfolio ────────────────────────────────────────────────────────────
+
+async def portfolio_edit_menu(
+    callback: types.CallbackQuery, state: FSMContext,
+) -> None:
+    parts = callback.data.split(":")  # tt_adm_pedit:work_id:style:idx
+    work_id, style_key, idx = int(parts[1]), parts[2], int(parts[3])
+    await state.update_data(edit_work_id=work_id, edit_style=style_key, edit_idx=idx)
+    await _safe_edit(
+        callback.message,
+        "✏️ <b>Редагування роботи</b>\n\nЩо змінити?",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="📝 Опис",     callback_data="tt_adm_pedit_field:d")],
+            [types.InlineKeyboardButton(text="⏱ Час роботи", callback_data="tt_adm_pedit_field:t")],
+            [types.InlineKeyboardButton(text="💰 Ціна",     callback_data="tt_adm_pedit_field:p")],
+            [types.InlineKeyboardButton(text="📸 Фото",     callback_data="tt_adm_pedit_field:f")],
+            [types.InlineKeyboardButton(text="❌ Скасувати", callback_data="tt_adm_cancel")],
+        ]),
+    )
+    await callback.answer()
+
+
+async def portfolio_edit_field(callback: types.CallbackQuery, state: FSMContext) -> None:
+    field = callback.data.split(":")[1]
+    prompts = {
+        "d": ("📝 Введіть новий опис роботи:", EditPortfolioFSM.description),
+        "t": ("⏱ Введіть новий час роботи (напр. <code>3 год</code>):", EditPortfolioFSM.work_time),
+        "p": ("💰 Введіть нову ціну (напр. <code>від 2000 грн</code>):", EditPortfolioFSM.price),
+        "f": ("📸 Надішліть нове фото роботи:", EditPortfolioFSM.photo),
+    }
+    prompt, state_cls = prompts[field]
+    await _safe_edit(callback.message, prompt, reply_markup=_cancel_kb())
+    await state.set_state(state_cls)
+    await callback.answer()
+
+
+async def _edit_done(message: types.Message, state: FSMContext, session: AsyncSession) -> None:
+    data = await state.get_data()
+    work = await session.get(TattooPortfolio, data["edit_work_id"])
+    if not work:
+        await message.answer("❌ Роботу не знайдено.")
+        await state.clear()
+        return
+    return work, data
+
+
+async def portfolio_edit_got_description(
+    message: types.Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    if not (2 <= len(message.text.strip()) <= MAX_TEXT_LEN):
+        await message.answer(f"❌ Від 2 до {MAX_TEXT_LEN} символів.")
+        return
+    result = await _edit_done(message, state, session)
+    if result is None:
+        return
+    work, data = result
+    work.description = message.text.strip()
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        "✅ Опис оновлено!",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text="◀️ До роботи",
+                callback_data=f"tt_adm_plist:{data['edit_style']}:{data['edit_idx']}",
+            ),
+        ]]),
+    )
+
+
+async def portfolio_edit_got_time(
+    message: types.Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    result = await _edit_done(message, state, session)
+    if result is None:
+        return
+    work, data = result
+    work.work_time = message.text.strip()
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        "✅ Час роботи оновлено!",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text="◀️ До роботи",
+                callback_data=f"tt_adm_plist:{data['edit_style']}:{data['edit_idx']}",
+            ),
+        ]]),
+    )
+
+
+async def portfolio_edit_got_price(
+    message: types.Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    result = await _edit_done(message, state, session)
+    if result is None:
+        return
+    work, data = result
+    work.price = message.text.strip()
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        "✅ Ціну оновлено!",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text="◀️ До роботи",
+                callback_data=f"tt_adm_plist:{data['edit_style']}:{data['edit_idx']}",
+            ),
+        ]]),
+    )
+
+
+async def portfolio_edit_got_photo(
+    message: types.Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    if not message.photo:
+        await message.answer("❌ Надішліть фото.")
+        return
+    result = await _edit_done(message, state, session)
+    if result is None:
+        return
+    work, data = result
+    work.photo_id = message.photo[-1].file_id
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        "✅ Фото оновлено!",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text="◀️ До роботи",
+                callback_data=f"tt_adm_plist:{data['edit_style']}:{data['edit_idx']}",
+            ),
+        ]]),
+    )
 
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
@@ -770,6 +941,102 @@ async def broadcast_confirm(
     await callback.answer()
 
 
+# ── Services management ───────────────────────────────────────────────────────
+
+async def _admin_services_list(
+    message: types.Message, session: AsyncSession, bot_id: int,
+) -> None:
+    result = await session.execute(
+        select(TattooService)
+        .where(TattooService.bot_id == bot_id)
+        .order_by(TattooService.position, TattooService.created_at)
+    )
+    services = list(result.scalars().all())
+
+    rows = []
+    for svc in services:
+        rows.append([types.InlineKeyboardButton(
+            text=f"🗑 {svc.name} — {svc.price}",
+            callback_data=f"tt_svc_del:{svc.id}",
+        )])
+    rows.append([types.InlineKeyboardButton(text="➕ Додати послугу", callback_data="tt_svc_add")])
+    rows.append([types.InlineKeyboardButton(text="◀️ Меню",           callback_data="tt_adm:home")])
+
+    services_text = "Послуг ще немає." if not services else f"Послуг: {len(services)}"
+    await _safe_edit(
+        message,
+        f"📋 <b>Послуги студії</b>\n\n{services_text}\n\n"
+        "<i>Натисніть на послугу щоб видалити її.</i>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+async def service_add_start(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await _safe_edit(
+        callback.message,
+        "➕ <b>Нова послуга</b>\n\nКрок 1/2 — Введіть назву послуги:",
+        reply_markup=_cancel_kb(),
+    )
+    await state.set_state(ServicesFSM.name)
+    await callback.answer()
+
+
+async def service_got_name(
+    message: types.Message, state: FSMContext,
+) -> None:
+    name = message.text.strip() if message.text else ""
+    if not (2 <= len(name) <= 128):
+        await message.answer("❌ Назва має бути від 2 до 128 символів.")
+        return
+    await state.update_data(service_name=name)
+    await message.answer(
+        f"Крок 2/2 — Введіть ціну для <b>{name}</b> (наприклад: <code>від 300 грн</code>):",
+        reply_markup=_cancel_kb(),
+    )
+    await state.set_state(ServicesFSM.price)
+
+
+async def service_got_price(
+    message: types.Message, state: FSMContext,
+    session: AsyncSession, registered_bot_id: int,
+) -> None:
+    price = message.text.strip() if message.text else ""
+    if not (1 <= len(price) <= 64):
+        await message.answer("❌ Ціна має бути від 1 до 64 символів.")
+        return
+    data = await state.get_data()
+    svc = TattooService(
+        bot_id=registered_bot_id,
+        name=data["service_name"],
+        price=price,
+    )
+    session.add(svc)
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        f"✅ Послугу <b>{data['service_name']}</b> додано!",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="📋 Список послуг", callback_data="tt_adm:services"),
+            types.InlineKeyboardButton(text="◀️ Меню",          callback_data="tt_adm:home"),
+        ]]),
+    )
+
+
+async def service_delete(
+    callback: types.CallbackQuery, session: AsyncSession, registered_bot_id: int,
+) -> None:
+    svc_id = int(callback.data.split(":")[1])
+    svc = await session.get(TattooService, svc_id)
+    if svc and svc.bot_id == registered_bot_id:
+        await session.delete(svc)
+        await session.commit()
+        await callback.answer("🗑 Послугу видалено", show_alert=True)
+    else:
+        await callback.answer("❌ Не знайдено", show_alert=True)
+        return
+    await _admin_services_list(callback.message, session, registered_bot_id)
+
+
 # ── Shared cancel ─────────────────────────────────────────────────────────────
 
 async def admin_fsm_cancel(callback: types.CallbackQuery, state: FSMContext) -> None:
@@ -831,9 +1098,15 @@ def register(dp: Dispatcher) -> None:
     dp.message.register(portfolio_got_work_time,     AddPortfolioFSM.work_time)
     dp.message.register(portfolio_got_price,         AddPortfolioFSM.price)
 
-    # Browse & delete portfolio
-    dp.callback_query.register(admin_portfolio_browse,  F.data.startswith("tt_adm_plist:"))
-    dp.callback_query.register(admin_portfolio_delete,  F.data.startswith("tt_adm_pdel:"))
+    # Browse, delete & edit portfolio
+    dp.callback_query.register(admin_portfolio_browse,    F.data.startswith("tt_adm_plist:"))
+    dp.callback_query.register(admin_portfolio_delete,    F.data.startswith("tt_adm_pdel:"))
+    dp.callback_query.register(portfolio_edit_menu,       F.data.startswith("tt_adm_pedit:"))
+    dp.callback_query.register(portfolio_edit_field,      F.data.startswith("tt_adm_pedit_field:"))
+    dp.message.register(portfolio_edit_got_description,   EditPortfolioFSM.description)
+    dp.message.register(portfolio_edit_got_time,          EditPortfolioFSM.work_time)
+    dp.message.register(portfolio_edit_got_price,         EditPortfolioFSM.price)
+    dp.message.register(portfolio_edit_got_photo,         EditPortfolioFSM.photo, F.photo)
 
     # Schedule
     dp.callback_query.register(schedule_nav,                F.data.startswith("tt_adm_nav:"))
@@ -848,6 +1121,12 @@ def register(dp: Dispatcher) -> None:
     # Broadcast
     dp.message.register(broadcast_got_message,   BroadcastFSM.message)
     dp.callback_query.register(broadcast_confirm, F.data == "tt_adm_bc:confirm", BroadcastFSM.confirm)
+
+    # Services
+    dp.callback_query.register(service_add_start, F.data == "tt_svc_add")
+    dp.callback_query.register(service_delete,    F.data.startswith("tt_svc_del:"))
+    dp.message.register(service_got_name,         ServicesFSM.name)
+    dp.message.register(service_got_price,        ServicesFSM.price)
 
     # Cancel
     dp.callback_query.register(admin_fsm_cancel, F.data == "tt_adm_cancel")

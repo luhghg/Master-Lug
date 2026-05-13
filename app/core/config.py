@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # --- Monitoring ---
     SENTRY_DSN: str = ""           # Leave empty to disable Sentry
 
+    # --- Support ---
+    SUPPORT_USERNAME: str = ""       # Telegram username for support button (without @)
+
+    # --- Subscription / payments ---
+    MONOBANK_CARD: str = ""          # Card number shown in payment reminders
+    SUBSCRIPTION_PRICE: int = 199    # UAH per month
+
     # --- Demo bots (register them on the platform, then fill in) ---
     DEMO_BOT_LABOR: str = ""       # @username — shown as link on landing
     DEMO_BOT_BEAUTY: str = ""      # @username — shown as link on landing
