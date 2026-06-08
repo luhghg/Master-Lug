@@ -195,6 +195,13 @@ async def show_contacts(
 async def apply_for_job(
     callback: types.CallbackQuery, session: AsyncSession, bot: Bot, registered_bot_id: int,
 ) -> None:
+    if is_demo_bot(registered_bot_id):
+        await callback.answer(
+            "⚠️ Це демо-режим — відгуки на вакансії недоступні.\n\n"
+            "Отримай власного бота → @masterlugbot",
+            show_alert=True,
+        )
+        return
     job_id_str = callback.data.split(":", 1)[1]
     try:
         job_id = uuid.UUID(job_id_str)

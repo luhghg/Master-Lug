@@ -13,7 +13,7 @@ from app.models.blocked_user import BotBlockedUser
 from app.models.job import Job, JobStatus, JobType
 from app.models.tattoo import BotSubscription
 from app.models.user import User
-from app.services.config_service import get_cfg, set_cfg
+from app.services.config_service import get_cfg, is_demo_bot, set_cfg
 from app.services.job_service import create_job, format_job_card, generate_deep_link
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,16 @@ def _employer_keyboard() -> types.InlineKeyboardMarkup:
 
 # ── Create job FSM ────────────────────────────────────────────────────────────
 
-async def start_create_job(callback: types.CallbackQuery, state: FSMContext) -> None:
+async def start_create_job(
+    callback: types.CallbackQuery, state: FSMContext, registered_bot_id: int = 0,
+) -> None:
+    if is_demo_bot(registered_bot_id):
+        await callback.answer(
+            "⚠️ Це демо-режим — створення вакансій недоступне.\n\n"
+            "Отримай власного бота → @masterlugbot",
+            show_alert=True,
+        )
+        return
     await _safe_edit(callback.message, "📍 В якому місті потрібен працівник?")
     await state.set_state(CreateJobFSM.city)
     await callback.answer()

@@ -131,6 +131,12 @@ async def admin_menu_callback(
     if action == "home":
         await _safe_edit(msg, "🎨 <b>Адмін-панель студії</b>", reply_markup=_admin_menu_markup())
     elif action == "add_portfolio":
+        if is_demo_bot(registered_bot_id):
+            await callback.answer(
+                "⚠️ Це демо-режим — додавання робіт недоступне.\n\nОтримай власного бота → @masterlugbot",
+                show_alert=True,
+            )
+            return
         await _portfolio_add_start(msg, state)
     elif action == "portfolio":
         await _admin_portfolio_list(msg, session, registered_bot_id, callback.from_user.id)
@@ -139,6 +145,12 @@ async def admin_menu_callback(
     elif action == "reviews":
         await _admin_reviews_pending(msg, session, registered_bot_id)
     elif action == "broadcast":
+        if is_demo_bot(registered_bot_id):
+            await callback.answer(
+                "⚠️ Це демо-режим — розсилка недоступна.\n\nОтримай власного бота → @masterlugbot",
+                show_alert=True,
+            )
+            return
         await _broadcast_start(msg, state)
     elif action == "settings":
         await _settings_menu(msg, session, registered_bot_id)
@@ -321,7 +333,15 @@ async def _categories_menu(message: types.Message, session: AsyncSession, bot_id
     )
 
 
-async def category_add_start(callback: types.CallbackQuery, state: FSMContext) -> None:
+async def category_add_start(
+    callback: types.CallbackQuery, state: FSMContext, registered_bot_id: int = 0,
+) -> None:
+    if is_demo_bot(registered_bot_id):
+        await callback.answer(
+            "⚠️ Це демо-режим — зміна категорій недоступна.\n\nОтримай власного бота → @masterlugbot",
+            show_alert=True,
+        )
+        return
     await _safe_edit(
         callback.message,
         "➕ Введіть назву нової категорії (можна з емодзі):\n"
@@ -971,7 +991,15 @@ async def _admin_services_list(
     )
 
 
-async def service_add_start(callback: types.CallbackQuery, state: FSMContext) -> None:
+async def service_add_start(
+    callback: types.CallbackQuery, state: FSMContext, registered_bot_id: int = 0,
+) -> None:
+    if is_demo_bot(registered_bot_id):
+        await callback.answer(
+            "⚠️ Це демо-режим — додавання послуг недоступне.\n\nОтримай власного бота → @masterlugbot",
+            show_alert=True,
+        )
+        return
     await _safe_edit(
         callback.message,
         "➕ <b>Нова послуга</b>\n\nКрок 1/2 — Введіть назву послуги:",

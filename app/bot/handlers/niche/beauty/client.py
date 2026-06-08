@@ -496,6 +496,12 @@ async def review_add_start(
     callback: types.CallbackQuery, state: FSMContext,
     session: AsyncSession, registered_bot_id: int,
 ) -> None:
+    if is_demo_bot(registered_bot_id):
+        await callback.answer(
+            "⚠️ Це демо-режим — залишати відгуки недоступно.\n\nОтримай власного бота → @masterlugbot",
+            show_alert=True,
+        )
+        return
     existing = await session.execute(
         select(TattooReview).where(
             TattooReview.bot_id == registered_bot_id,
