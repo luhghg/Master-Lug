@@ -16,10 +16,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column(
-        'tattoo_portfolio',
+        'tattoo_portfolios',
         sa.Column('demo_owner_id', sa.BigInteger(), nullable=True),
     )
 
 
 def downgrade() -> None:
-    op.drop_column('tattoo_portfolio', 'demo_owner_id')
+    op.drop_column('tattoo_portfolios', 'demo_owner_id')
