@@ -12,6 +12,24 @@ from app.services.config_service import (
     get_json, set_cfg, set_json,
 )
 
+# Stable placeholder images for demo portfolio (picsum seed = consistent image)
+_DEMO_PORTFOLIO = [
+    dict(
+        style="realism",
+        photo_url="https://picsum.photos/seed/masterlug_p1/800/600",
+        description="Реалістичний портрет — детальна передача тіней, світла та текстури шкіри. Виконано в 2 сеанси, загальний час 6 годин.",
+        work_time="6 годин (2 сеанси)",
+        price="від 4 000 грн",
+    ),
+    dict(
+        style="geometric",
+        photo_url="https://picsum.photos/seed/masterlug_p2/800/600",
+        description="Геометричний орнамент на передпліччі. Чіткі лінії, симетрія, абсолютний blackwork без напівтонів.",
+        work_time="3 години",
+        price="від 2 000 грн",
+    ),
+]
+
 logger = logging.getLogger(__name__)
 
 _LABOR_JOBS = [
@@ -88,13 +106,18 @@ async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
     logger.info("Seeded %d demo jobs for bot_id=%d", len(_LABOR_JOBS), bot_id)
 
 
-async def seed_beauty_demo(session: AsyncSession, bot_id: int) -> None:
-    bot = await session.get(RegisteredBot, bot_id)
-    if not bot:
+async def seed_beauty_demo(
+    session: AsyncSession,
+    bot_id: int,
+    bot=None,
+    owner_id: int = 0,
+) -> None:
+    record = await session.get(RegisteredBot, bot_id)
+    if not record:
         return
 
-    if not bot.is_active:
-        bot.is_active = True
+    if not record.is_active:
+        record.is_active = True
         await session.commit()
 
     cats = await get_json(session, bot_id, CATEGORIES, None)
@@ -121,3 +144,44 @@ async def seed_beauty_demo(session: AsyncSession, bot_id: int) -> None:
         await set_json(session, bot_id, TIME_SLOTS, ["10:00", "12:00", "14:00", "16:00", "18:00"])
 
     logger.info("Seeded beauty demo config for bot_id=%d", bot_id)
+
+    # Seed demo portfolio photos — requires live bot + owner chat
+    if bot and owner_id:
+        from app.models.tattoo import TattooPortfolio
+        count = await session.scalar(
+            select(func.count(TattooPortfolio.id)).where(TattooPortfolio.bot_id == bot_id)
+        )
+        if count:
+            return  # already seeded
+
+        seeded = 0
+        for item in _DEMO_PORTFOLIO:
+            try:
+                # Send silently to owner to obtain a permanent Telegram file_id
+                msg = await bot.send_photo(
+                    chat_id=owner_id,
+                    photo=item["photo_url"],
+                    caption="📌 Автосід демо-портфоліо (технічне повідомлення)",
+                    disable_notification=True,
+                )
+                file_id = msg.photo[-1].file_id
+                try:
+                    await bot.delete_message(owner_id, msg.message_id)
+                except Exception:
+                    pass
+                session.add(TattooPortfolio(
+                    bot_id=bot_id,
+                    style=item["style"],
+                    photo_id=file_id,
+                    description=item["description"],
+                    work_time=item["work_time"],
+                    price=item["price"],
+                    view_count=0,
+                ))
+                seeded += 1
+            except Exception as e:
+                logger.warning("Could not seed portfolio item '%s': %s", item["style"], e)
+
+        if seeded:
+            await session.commit()
+            logger.info("Seeded %d demo portfolio items for bot_id=%d", seeded, bot_id)

@@ -137,7 +137,22 @@ async def lifespan(app: FastAPI):
         if settings.DEMO_BOT_LABOR_ID:
             await seed_labor_demo(session, settings.DEMO_BOT_LABOR_ID)
         if settings.DEMO_BOT_BEAUTY_ID:
-            await seed_beauty_demo(session, settings.DEMO_BOT_BEAUTY_ID)
+            # Create a temporary bot instance to upload demo portfolio photos
+            demo_beauty_bot = None
+            beauty_record = await session.get(RegisteredBot, settings.DEMO_BOT_BEAUTY_ID)
+            if beauty_record:
+                demo_beauty_bot = AiogramBot(
+                    token=decrypt_token(beauty_record.encrypted_token),
+                    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+                )
+            await seed_beauty_demo(
+                session,
+                settings.DEMO_BOT_BEAUTY_ID,
+                bot=demo_beauty_bot,
+                owner_id=settings.PLATFORM_OWNER_ID,
+            )
+            if demo_beauty_bot:
+                await demo_beauty_bot.session.close()
 
     yield
     # ── Shutdown ──────────────────────────────────────────────────────────────
