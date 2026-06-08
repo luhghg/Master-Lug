@@ -85,6 +85,10 @@ async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
 
 
 async def seed_beauty_demo(session: AsyncSession, bot_id: int) -> None:
+    bot = await session.get(RegisteredBot, bot_id)
+    if not bot:
+        return
+
     cats = await get_json(session, bot_id, CATEGORIES, None)
     if not cats:
         await set_json(session, bot_id, CATEGORIES, _BEAUTY_CATEGORIES)
