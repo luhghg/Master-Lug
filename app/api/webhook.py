@@ -86,6 +86,10 @@ async def _notify_owner(owner_id: int, text: str) -> None:
 
 async def _check_subscription(registered_bot: RegisteredBot) -> bool:
     """Return True if bot may process updates. Handles deactivation + tiered warnings."""
+    # Platform owner's bots are always active — no subscription checks
+    if settings.PLATFORM_OWNER_ID and registered_bot.owner_telegram_id == settings.PLATFORM_OWNER_ID:
+        return True
+
     if not registered_bot.is_active:
         return False
 
