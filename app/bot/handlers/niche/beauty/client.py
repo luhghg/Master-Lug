@@ -366,14 +366,23 @@ async def booking_got_contact(
 ) -> None:
     phone = message.contact.phone_number
     data = await state.get_data()
-    booking = TattooBooking(
-        bot_id=registered_bot_id, user_id=message.from_user.id,
-        idea=data["idea"], body_part=data["body_part"], size=data["size"],
-        date=data["booking_date"], time_slot=data["time_slot"],
-        phone=phone, reference_id=data.get("reference_id"), status=BookingStatus.NEW,
-    )
-    session.add(booking)
-    await session.commit()
+    try:
+        booking = TattooBooking(
+            bot_id=registered_bot_id, user_id=message.from_user.id,
+            idea=data["idea"], body_part=data["body_part"], size=data["size"],
+            date=data["booking_date"], time_slot=data["time_slot"],
+            phone=phone, reference_id=data.get("reference_id"), status=BookingStatus.NEW,
+        )
+        session.add(booking)
+        await session.commit()
+    except Exception:
+        logger.exception("booking_got_contact: failed to save booking for user=%s", message.from_user.id)
+        await state.clear()
+        await message.answer(
+            "❌ Сталася помилка при збереженні запису. Спробуйте ще раз — /start",
+            reply_markup=types.ReplyKeyboardRemove(),
+        )
+        return
     await state.clear()
 
     d = datetime.strptime(data["booking_date"], "%Y-%m-%d").date()
