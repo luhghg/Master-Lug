@@ -63,14 +63,18 @@ _BEAUTY_CATEGORIES = [
 
 
 async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
+    bot = await session.get(RegisteredBot, bot_id)
+    if not bot:
+        return
+
+    if not bot.is_active:
+        bot.is_active = True
+        await session.commit()
+
     existing = await session.scalar(
         select(func.count(Job.id)).where(Job.bot_id == bot_id)
     )
     if existing and existing > 0:
-        return
-
-    bot = await session.get(RegisteredBot, bot_id)
-    if not bot:
         return
 
     for data in _LABOR_JOBS:
@@ -88,6 +92,10 @@ async def seed_beauty_demo(session: AsyncSession, bot_id: int) -> None:
     bot = await session.get(RegisteredBot, bot_id)
     if not bot:
         return
+
+    if not bot.is_active:
+        bot.is_active = True
+        await session.commit()
 
     cats = await get_json(session, bot_id, CATEGORIES, None)
     if not cats:
