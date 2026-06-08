@@ -14,10 +14,12 @@ import app.models  # noqa: F401 — registers all ORM models with Base.metadata
 
 config = context.config
 
-# Derive a sync psycopg2 URL from the async asyncpg URL
-sync_url = settings.DATABASE_URL.replace(
-    "postgresql+asyncpg", "postgresql+psycopg2"
-).replace("?ssl=disable", "")
+# Normalise to a sync psycopg2 URL regardless of input format
+sync_url = settings.DATABASE_URL
+sync_url = sync_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+sync_url = sync_url.replace("postgres://", "postgresql+psycopg2://", 1)
+sync_url = sync_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+sync_url = sync_url.replace("?ssl=disable", "").replace("?ssl=require", "?sslmode=require")
 
 config.set_main_option("sqlalchemy.url", sync_url)
 

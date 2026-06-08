@@ -2,10 +2,7 @@
 set -e
 
 echo "Running database migrations..."
-if ! alembic upgrade head 2>&1; then
-    echo "Migration failed — stamping current state as head (existing DB)"
-    alembic stamp head
-fi
+alembic upgrade head
 
 echo "Starting server..."
 exec uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1
