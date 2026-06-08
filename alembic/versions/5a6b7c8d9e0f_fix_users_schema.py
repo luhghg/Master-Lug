@@ -32,7 +32,17 @@ def upgrade() -> None:
     if not _column_exists('users', 'id'):
         # Old schema: telegram_id is the primary key — replace with serial id
         op.execute(sa.text("ALTER TABLE users ADD COLUMN id SERIAL"))
-        op.drop_constraint('users_pkey', 'users', type_='primary')
+
+        # Find the actual PK constraint name (may differ from users_pkey)
+        bind = op.get_bind()
+        row = bind.execute(sa.text(
+            "SELECT constraint_name FROM information_schema.table_constraints "
+            "WHERE table_name='users' AND constraint_type='PRIMARY KEY' "
+            "AND table_schema='public'"
+        )).fetchone()
+        if row:
+            op.execute(sa.text(f'ALTER TABLE users DROP CONSTRAINT "{row[0]}"'))
+
         op.create_primary_key('pk_users', 'users', ['id'])
         op.create_unique_constraint('uq_users_telegram_id', 'users', ['telegram_id'])
         op.create_index('ix_users_telegram_id', 'users', ['telegram_id'])
