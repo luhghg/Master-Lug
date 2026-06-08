@@ -21,14 +21,23 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table(
         'users',
+        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
         sa.Column('telegram_id', sa.BigInteger(), nullable=False),
-        sa.Column('username', sa.String(), nullable=True),
-        sa.Column('first_name', sa.String(), nullable=True),
-        sa.Column('last_name', sa.String(), nullable=True),
+        sa.Column('username', sa.String(64), nullable=True),
+        sa.Column('first_name', sa.String(128), nullable=True),
+        sa.Column('last_name', sa.String(128), nullable=True),
+        sa.Column('city', sa.String(64), nullable=True),
+        sa.Column('global_rating', sa.Float(), nullable=False, server_default=sa.text('5.0')),
+        sa.Column('total_completed', sa.Integer(), nullable=False, server_default=sa.text('0')),
+        sa.Column('total_failed', sa.Integer(), nullable=False, server_default=sa.text('0')),
+        sa.Column('is_banned', sa.Boolean(), nullable=False, server_default=sa.text('false')),
         sa.Column('terms_agreed_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.PrimaryKeyConstraint('telegram_id'),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('telegram_id', name='uq_users_telegram_id'),
     )
+    op.create_index('ix_users_telegram_id', 'users', ['telegram_id'])
 
     op.create_table(
         'registered_bots',
