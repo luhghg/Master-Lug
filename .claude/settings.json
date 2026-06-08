@@ -26,7 +26,12 @@
       "Bash(grep -v \"^$\")",
       "Bash(venv/Scripts/pip install *)",
       "Bash(python -c ' *)",
-      "Bash(timeout 5)"
+      "Bash(timeout 5)",
+      "Bash(cat /mnt/c/Users/Admin/Desktop/aasabot/scripts/start.sh 2>/dev/null || type \"C:\\\\Users\\\\Admin\\\\Desktop\\\\aasabot\\\\scripts\\\\start.sh\" 2>/dev/null)",
+      "Read(//mnt/c/Users/Admin/Desktop/aasabot/scripts/**)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
