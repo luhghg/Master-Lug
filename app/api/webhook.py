@@ -13,19 +13,65 @@ from app.services.bot_service import get_bot_by_token
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_SUB_WARN_DAYS = 7      # days before expiry to send first warning
-_WARN_TTL_SEC  = 3 * 24 * 3600  # re-warn interval: 3 days
+# Warning thresholds (days before expiry) and their Redis TTLs (seconds)
+# Each threshold fires exactly once and never repeats for that subscription period
+_WARN_LEVELS = [
+    (7, 8 * 24 * 3600),   # 7-day warning, key lives 8 days
+    (3, 4 * 24 * 3600),   # 3-day strong warning
+    (2, 3 * 24 * 3600),   # 2-day strong warning
+    (1, 2 * 24 * 3600),   # 1-day critical warning
+]
 
 
-def _payment_instructions(bot_username: str) -> str:
+def _support_line() -> str:
+    if settings.SUPPORT_USERNAME:
+        return f"\n\n❓ Виникли питання? @{settings.SUPPORT_USERNAME}"
+    return ""
+
+
+def _payment_block(bot_username: str) -> str:
     card = settings.MONOBANK_CARD or "—"
     price = settings.SUBSCRIPTION_PRICE
-    master = settings.PLATFORM_OWNER_ID  # fallback; ideally use master bot username
     return (
         f"💳 <b>Monobank:</b> <code>{card}</code>\n"
-        f"💰 Сума: <b>{price} грн/міс</b>\n"
-        f"📝 Призначення: <code>MasterLug @{bot_username}</code>\n\n"
-        f"Після оплати напишіть у @masterlugbot — активуємо вручну."
+        f"💰 Сума: <b>{price} грн/міс</b>\n\n"
+        f"⚠️ <b>ОБОВ'ЯЗКОВО вкажіть призначення платежу:</b>\n"
+        f"┌─────────────────────────┐\n"
+        f"  <code>MasterLug @{bot_username}</code>\n"
+        f"└─────────────────────────┘\n"
+        f"👆 <b>Просто скопіюйте та вставте цей текст при переказі!</b>\n"
+        f"<i>Без правильного призначення ми не зможемо знайти вашу оплату.</i>\n\n"
+        f"Після оплати напишіть у @masterlugbot — активуємо протягом кількох годин."
+        + _support_line()
+    )
+
+
+def _warn_text(bot_username: str, days_left: int) -> str:
+    if days_left == 1:
+        return (
+            f"🚨 <b>УВАГА! Бот @{bot_username} вимкнеться ЗАВТРА!</b>\n\n"
+            f"Залишився <b>1 день</b> підписки.\n"
+            f"Якщо не оплатити сьогодні — бот перестане відповідати клієнтам!\n\n"
+            f"⬇️ Оплатіть прямо зараз:\n\n"
+            + _payment_block(bot_username)
+        )
+    if days_left == 2:
+        return (
+            f"🚨 <b>УВАГА! До вимкнення бота @{bot_username} — 2 дні!</b>\n\n"
+            f"Без оплати бот вимкнеться і клієнти не зможуть ним користуватись.\n\n"
+            f"⬇️ Оплатіть щоб уникнути перерви в роботі:\n\n"
+            + _payment_block(bot_username)
+        )
+    if days_left == 3:
+        return (
+            f"⚠️ <b>Підписка на @{bot_username} закінчується через 3 дні!</b>\n\n"
+            f"Не забудьте поновити — без оплати бот вимкнеться.\n\n"
+            + _payment_block(bot_username)
+        )
+    return (
+        f"⚠️ <b>Підписка на @{bot_username} закінчується через {days_left} дн.</b>\n\n"
+        f"Оплатіть заздалегідь щоб не переривати роботу бота.\n\n"
+        + _payment_block(bot_username)
     )
 
 
@@ -39,7 +85,7 @@ async def _notify_owner(owner_id: int, text: str) -> None:
 
 
 async def _check_subscription(registered_bot: RegisteredBot) -> bool:
-    """Return True if bot is allowed to process updates. Side-effects: deactivate + notify."""
+    """Return True if bot may process updates. Handles deactivation + tiered warnings."""
     if not registered_bot.is_active:
         return False
 
@@ -50,7 +96,6 @@ async def _check_subscription(registered_bot: RegisteredBot) -> bool:
     now = datetime.now(timezone.utc)
 
     if exp <= now:
-        # Expired — deactivate and notify
         async with AsyncSessionLocal() as session:
             bot = await session.get(RegisteredBot, registered_bot.id)
             if bot and bot.is_active:
@@ -60,23 +105,25 @@ async def _check_subscription(registered_bot: RegisteredBot) -> bool:
         await _notify_owner(
             registered_bot.owner_telegram_id,
             f"🔴 <b>Підписка на @{registered_bot.bot_username} закінчилась!</b>\n\n"
-            f"Бот вимкнено. Щоб відновити:\n\n"
-            + _payment_instructions(registered_bot.bot_username),
+            f"Бот вимкнено. Клієнти не можуть ним користуватись.\n\n"
+            f"Щоб відновити роботу — оплатіть підписку:\n\n"
+            + _payment_block(registered_bot.bot_username),
         )
         return False
 
     days_left = (exp - now).days
-    if days_left <= _SUB_WARN_DAYS:
-        redis = await get_redis()
-        warn_key = f"sub_warn:{registered_bot.id}"
-        if not await redis.exists(warn_key):
-            await redis.setex(warn_key, _WARN_TTL_SEC, "1")
-            await _notify_owner(
-                registered_bot.owner_telegram_id,
-                f"⚠️ <b>Підписка на @{registered_bot.bot_username} закінчується через {days_left} дн.</b>\n\n"
-                f"Щоб не втратити бот:\n\n"
-                + _payment_instructions(registered_bot.bot_username),
-            )
+    redis = await get_redis()
+
+    # Fire warning for each threshold exactly once
+    for threshold, ttl in _WARN_LEVELS:
+        if days_left <= threshold:
+            warn_key = f"sub_warn:{registered_bot.id}:{threshold}"
+            if not await redis.exists(warn_key):
+                await redis.setex(warn_key, ttl, "1")
+                await _notify_owner(
+                    registered_bot.owner_telegram_id,
+                    _warn_text(registered_bot.bot_username, days_left),
+                )
 
     return True
 

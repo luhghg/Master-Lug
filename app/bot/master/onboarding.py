@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
@@ -15,7 +15,6 @@ from app.core import app_state
 from app.core.config import settings
 from app.core.security import hash_token
 from app.models.bot import BotNiche, RegisteredBot
-from app.models.whitelist import PlatformWhitelist
 from app.services.bot_service import register_bot
 
 logger = logging.getLogger(__name__)
@@ -24,6 +23,11 @@ NICHE_LABELS: dict[BotNiche, str] = {
     BotNiche.LABOR:  "💼 Робота та підробіток",
     BotNiche.BEAUTY: "💅 Краса та тату",
     BotNiche.SPORTS: "🏋️ Спорт та фітнес",
+}
+
+PRODUCT_NAMES: dict[BotNiche, str] = {
+    BotNiche.BEAUTY: "🎨 Бот для майстра краси",
+    BotNiche.LABOR:  "👷 Бот для роботодавця",
 }
 
 NICHE_NAME_EXAMPLES: dict[BotNiche, str] = {
@@ -52,31 +56,17 @@ class OnboardingFSM(StatesGroup):
     waiting_token = State()
 
 
-# ── Landing helpers ───────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _connect_btn() -> types.InlineKeyboardButton:
-    return types.InlineKeyboardButton(text="📩 Підключитись", callback_data="wl:request")
+def _btn(text: str, *, cb: str = "", url: str = "") -> types.InlineKeyboardButton:
+    if url:
+        return types.InlineKeyboardButton(text=text, url=url)
+    return types.InlineKeyboardButton(text=text, callback_data=cb)
 
-def _back_btn() -> types.InlineKeyboardButton:
-    return types.InlineKeyboardButton(text="◀️ Назад", callback_data="land:home")
 
-def _landing_home_kb() -> types.InlineKeyboardMarkup:
-    return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="💼 Бот для найму",      callback_data="land:labor")],
-        [types.InlineKeyboardButton(text="💅 Бот для тату/краси", callback_data="land:beauty")],
-        [types.InlineKeyboardButton(text="💰 Ціни",               callback_data="land:pricing")],
-        [_connect_btn()],
-    ])
+def _kb(*rows) -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=list(rows))
 
-def _landing_home_text() -> str:
-    return (
-        "👋 <b>Ласкаво просимо до MasterLug!</b>\n\n"
-        "Платформа для створення Telegram-ботів під ваш бізнес.\n\n"
-        "⚡️ Готовий бот за 2 хвилини\n"
-        "🔧 Без програмування\n"
-        "💰 Від 199 грн/місяць\n\n"
-        "Оберіть вашу нішу щоб побачити демо:"
-    )
 
 async def _safe_edit(message: types.Message, text: str, **kwargs) -> None:
     try:
@@ -85,105 +75,145 @@ async def _safe_edit(message: types.Message, text: str, **kwargs) -> None:
         await message.answer(text, **kwargs)
 
 
-# ── Landing pages ─────────────────────────────────────────────────────────────
+# ── Welcome landing ───────────────────────────────────────────────────────────
+
+def _welcome_text() -> str:
+    return (
+        "👋 <b>Ласкаво просимо до MasterLug!</b>\n\n"
+        "Платформа Telegram-ботів для малого бізнесу.\n\n"
+        "⚡️ Готовий бот за 2 хвилини\n"
+        "🔧 Без програмування\n"
+        "💰 199 грн/місяць за бот\n\n"
+        "Що вас цікавить?"
+    )
+
+
+def _welcome_kb() -> types.InlineKeyboardMarkup:
+    rows = [
+        [_btn("🤖 Обрати свій бот", cb="land:catalog")],
+        [_btn("💰 Ціни та умови", cb="land:pricing"), _btn("❓ Як це працює", cb="land:howto")],
+    ]
+    if settings.SUPPORT_USERNAME:
+        rows.append([_btn("💬 Підтримка", url=f"https://t.me/{settings.SUPPORT_USERNAME}")])
+    return _kb(*rows)
+
 
 async def land_home(callback: types.CallbackQuery) -> None:
-    await _safe_edit(callback.message, _landing_home_text(), reply_markup=_landing_home_kb())
+    await _safe_edit(callback.message, _welcome_text(), reply_markup=_welcome_kb())
+    await callback.answer()
+
+
+# ── Catalog ───────────────────────────────────────────────────────────────────
+
+async def land_catalog(callback: types.CallbackQuery) -> None:
+    await _safe_edit(
+        callback.message,
+        "🛒 <b>Каталог ботів</b>\n\nОберіть тип бота для вашого бізнесу:",
+        reply_markup=_kb(
+            [_btn("🎨 Бот для майстра краси", cb="land:beauty")],
+            [_btn("👷 Бот для роботодавця",   cb="land:labor")],
+            [_btn("◀️ Назад",                 cb="land:home")],
+        ),
+    )
+    await callback.answer()
+
+
+# ── Product pages ─────────────────────────────────────────────────────────────
+
+async def land_beauty(callback: types.CallbackQuery) -> None:
+    rows = []
+    if settings.DEMO_BOT_BEAUTY:
+        rows.append([_btn("🤖 Спробувати демо-бот", url=f"https://t.me/{settings.DEMO_BOT_BEAUTY}")])
+    rows.append([_btn("🚀 Підключити цей бот", cb="register:BEAUTY")])
+    rows.append([_btn("◀️ До каталогу", cb="land:catalog")])
+
+    await _safe_edit(
+        callback.message,
+        "🎨 <b>Бот для майстра краси</b>\n\n"
+        "Для тату-майстрів, косметологів, нейл-майстрів, перукарів.\n\n"
+        "<b>Що вміє бот:</b>\n"
+        "✅ Онлайн-запис — клієнт обирає дату і час сам\n"
+        "✅ Портфоліо по стилях з фото\n"
+        "✅ Відгуки клієнтів після сеансу\n"
+        "✅ Сповіщення про нові записи миттєво\n"
+        "✅ Управління розкладом і слотами\n"
+        "✅ Список послуг з цінами\n\n"
+        "💰 <b>199 грн/місяць</b>\n\n"
+        "<i>Клієнти записуються самі — ви тільки працюєте.</i>",
+        reply_markup=_kb(*rows),
+    )
     await callback.answer()
 
 
 async def land_labor(callback: types.CallbackQuery) -> None:
     rows = []
     if settings.DEMO_BOT_LABOR:
-        rows.append([types.InlineKeyboardButton(
-            text="🤖 Спробувати демо-бот",
-            url=f"https://t.me/{settings.DEMO_BOT_LABOR}",
-        )])
-    rows.append([_back_btn(), _connect_btn()])
+        rows.append([_btn("🤖 Спробувати демо-бот", url=f"https://t.me/{settings.DEMO_BOT_LABOR}")])
+    rows.append([_btn("🚀 Підключити цей бот", cb="register:LABOR")])
+    rows.append([_btn("◀️ До каталогу", cb="land:catalog")])
 
     await _safe_edit(
         callback.message,
-        "💼 <b>Бот для найму персоналу</b>\n\n"
-        "Для роботодавців у будівництві, складах, промоціях, "
-        "сервісі — де потрібні разові або постійні працівники.\n\n"
+        "👷 <b>Бот для роботодавця</b>\n\n"
+        "Для роботодавців у будівництві, складах, промоціях, сервісі.\n\n"
         "<b>Що вміє бот:</b>\n"
         "✅ Публікація вакансій — місто, оплата, адреса, час\n"
         "✅ Кандидати відгукуються прямо в боті\n"
         "✅ Ви приймаєте або відхиляєте одним кліком\n"
         "✅ Рейтинг працівників — захист від недобросовісних\n"
-        "✅ Архів вакансій та статистика по заявках\n\n"
-        "<i>Роботодавець публікує — кандидати самі приходять.</i>",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        "✅ Архів вакансій та статистика\n\n"
+        "💰 <b>199 грн/місяць</b>\n\n"
+        "<i>Публікуйте вакансії — кандидати самі приходять.</i>",
+        reply_markup=_kb(*rows),
     )
     await callback.answer()
 
 
-async def land_beauty(callback: types.CallbackQuery) -> None:
-    rows = []
-    if settings.DEMO_BOT_BEAUTY:
-        rows.append([types.InlineKeyboardButton(
-            text="🤖 Спробувати демо-бот",
-            url=f"https://t.me/{settings.DEMO_BOT_BEAUTY}",
-        )])
-    rows.append([_back_btn(), _connect_btn()])
-
-    await _safe_edit(
-        callback.message,
-        "💅 <b>Бот для тату-майстрів та б'юті-індустрії</b>\n\n"
-        "Для тату-майстрів, косметологів, нейл-майстрів, "
-        "перукарів — будь-яких б'юті-спеціалістів.\n\n"
-        "<b>Що вміє бот:</b>\n"
-        "✅ Онлайн-запис — клієнт обирає дату і час сам\n"
-        "✅ Портфоліо по стилях з фото\n"
-        "✅ Відгуки клієнтів після сеансу\n"
-        "✅ Миттєві сповіщення про нові записи\n"
-        "✅ Управління розкладом і слотами\n\n"
-        "<i>Клієнти записуються самі — ви тільки працюєте.</i>",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await callback.answer()
-
-
-_VIDEO_MAP = {
-    "labor_client":  lambda: settings.DEMO_VIDEO_LABOR_CLIENT,
-    "labor_admin":   lambda: settings.DEMO_VIDEO_LABOR_ADMIN,
-    "beauty_client": lambda: settings.DEMO_VIDEO_BEAUTY_CLIENT,
-    "beauty_admin":  lambda: settings.DEMO_VIDEO_BEAUTY_ADMIN,
-}
-
-async def land_video(callback: types.CallbackQuery) -> None:
-    key = callback.data.split(":")[2]
-    getter = _VIDEO_MAP.get(key)
-    file_id = getter() if getter else ""
-    if not file_id:
-        await callback.answer("Відео ще не додано", show_alert=True)
-        return
-    await callback.message.answer_video(
-        video=file_id,
-        caption="📹 Демо-відео платформи Arete",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-            types.InlineKeyboardButton(text="📩 Підключитись", callback_data="wl:request"),
-        ]]),
-    )
-    await callback.answer()
-
+# ── Pricing & How-to pages ────────────────────────────────────────────────────
 
 async def land_pricing(callback: types.CallbackQuery) -> None:
     await _safe_edit(
         callback.message,
         "💰 <b>Ціни та умови</b>\n\n"
         "🎯 <b>Один план — все включено</b>\n\n"
-        "       <b>199 грн / місяць</b>\n\n"
+        "         <b>199 грн / місяць за бот</b>\n\n"
         "✅ Необмежена кількість клієнтів\n"
         "✅ Всі функції платформи\n"
         "✅ Технічна підтримка\n"
-        "✅ Оновлення безкоштовно\n"
-        "✅ Ваш особистий Telegram-бот\n\n"
-        "🎁 <b>Перший місяць — безкоштовно</b>\n"
-        "<i>(для перших 3 клієнтів)</i>",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [_back_btn(), _connect_btn()],
-        ]),
+        "✅ Оновлення безкоштовно\n\n"
+        "📌 <b>Кожен бот — окрема підписка:</b>\n"
+        "  1 бот  →  199 грн/міс\n"
+        "  2 боти →  398 грн/міс\n\n"
+        "🎁 <b>Перші 3 клієнти платформи отримують\n"
+        "перший бот безкоштовно на 30 днів!</b>",
+        reply_markup=_kb(
+            [_btn("🚀 Отримати бот", cb="land:catalog")],
+            [_btn("◀️ Назад",        cb="land:home")],
+        ),
+    )
+    await callback.answer()
+
+
+async def land_howto(callback: types.CallbackQuery) -> None:
+    await _safe_edit(
+        callback.message,
+        "❓ <b>Як підключити свого бота?</b>\n\n"
+        "<b>Всього 3 кроки — займе 2-3 хвилини:</b>\n\n"
+        "1️⃣ <b>Оберіть тип бота</b>\n"
+        "   Краса/тату або Роботодавець\n\n"
+        "2️⃣ <b>Створіть бота в @BotFather</b>\n"
+        "   • /newbot → введіть назву → введіть username\n"
+        "   • Скопіюйте токен: <code>1234567:AAH...</code>\n\n"
+        "3️⃣ <b>Вставте токен сюди</b>\n"
+        "   Бот одразу активується і готовий!\n\n"
+        "4️⃣ <b>Налаштуйте через адмін-панель</b>\n"
+        "   Відкрийте свого нового бота → /start\n"
+        "   Там є все: портфоліо, розклад, привітання\n\n"
+        "<i>Є питання? Пишіть у підтримку — допоможемо!</i>",
+        reply_markup=_kb(
+            [_btn("🚀 Підключити бот", cb="land:catalog")],
+            [_btn("◀️ Назад",          cb="land:home")],
+        ),
     )
     await callback.answer()
 
@@ -196,7 +226,6 @@ async def cmd_start(
     session: AsyncSession,
     command: CommandObject = None,
 ) -> None:
-    # Parse referral before clearing state
     args = (command.args or "") if command else ""
     referrer_id = None
     if args.startswith("ref_"):
@@ -208,72 +237,93 @@ async def cmd_start(
             pass
 
     await state.clear()
-
     if referrer_id:
         await state.update_data(referrer_id=referrer_id)
+        # Track referral click in Redis
+        from app.core.redis_client import get_redis
+        redis = await get_redis()
+        await redis.incr(f"ref_clicks:{referrer_id}")
 
-    user_id = message.from_user.id
-
-    if user_id != settings.PLATFORM_OWNER_ID:
-        result = await session.execute(
-            select(PlatformWhitelist).where(PlatformWhitelist.telegram_id == user_id)
-        )
-        if not result.scalar_one_or_none():
-            await message.answer(_landing_home_text(), reply_markup=_landing_home_kb())
-            return
-
-    # If user already has bots → show profile + option to add more
+    # Returning user with bots → profile/dashboard
     existing = await session.execute(
-        select(RegisteredBot).where(RegisteredBot.owner_telegram_id == user_id)
+        select(RegisteredBot).where(RegisteredBot.owner_telegram_id == message.from_user.id)
     )
     bots = list(existing.scalars().all())
     if bots:
-        await _show_my_bots(message, bots, user_id)
+        await _show_my_bots(message, bots, message.from_user.id)
         return
 
-    await _show_niche_selector(message, state)
+    # New user → welcome landing
+    await message.answer(_welcome_text(), reply_markup=_welcome_kb())
 
+
+# ── Registration from landing (niche pre-selected) ───────────────────────────
+
+async def connect_from_landing(callback: types.CallbackQuery, state: FSMContext) -> None:
+    niche_value = callback.data.split(":", 1)[1]
+    try:
+        niche = BotNiche(niche_value)
+    except ValueError:
+        await callback.answer("Невідома ніша", show_alert=True)
+        return
+
+    await state.update_data(niche=niche_value)
+    await _show_terms(callback.message, niche, edit=True)
+    await state.set_state(OnboardingFSM.terms)
+    await callback.answer()
+
+
+def _terms_text(niche: BotNiche) -> str:
+    example = NICHE_NAME_EXAMPLES[niche]
+    product = PRODUCT_NAMES.get(niche, NICHE_LABELS[niche])
+    return (
+        f"✅ Обрано: <b>{product}</b>\n\n"
+        f"{NAMING_RULES}\n\n"
+        "─────────────────────\n\n"
+        "<b>Умови використання платформи:</b>\n\n"
+        "• Ви надаєте технічний доступ до бота для роботи сервісу\n"
+        "• Платформа не читає переписку ваших користувачів\n"
+        "• Токен зберігається у зашифрованому вигляді\n"
+        "• Ви можете відключити бота у будь-який момент\n"
+        "• Сервіс надається на умовах підписки (199 грн/міс за бот)\n"
+        "• В описі вашого бота буде автоматично вказано платформу\n\n"
+        f"<i>Рекомендована назва: <code>{example}</code></i>"
+    )
+
+
+async def _show_terms(message: types.Message, niche: BotNiche, edit: bool = False) -> None:
+    text = _terms_text(niche)
+    kb = _kb(
+        [_btn("✅ Розумію та погоджуюсь", cb="master:terms:agree")],
+        [_btn("◀️ До каталогу",           cb="master:terms:back")],
+    )
+    if edit:
+        await _safe_edit(message, text, reply_markup=kb)
+    else:
+        await message.answer(text, reply_markup=kb)
+
+
+# ── Onboarding FSM ────────────────────────────────────────────────────────────
 
 async def _show_niche_selector(message: types.Message, state: FSMContext) -> None:
-    await message.answer(
-        "👋 <b>Ласкаво просимо до MasterLug!</b>\n\n"
-        "Я допоможу вам створити власного Telegram-бота для вашого бізнесу за 2 хвилини.\n\n"
-        "Оберіть нішу:",
-        reply_markup=types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [types.InlineKeyboardButton(text=label, callback_data=f"niche:{niche.value}")]
-                for niche, label in NICHE_LABELS.items()
-            ]
+    """Fallback niche selector (used if somehow in select_niche state)."""
+    await _safe_edit(
+        message,
+        "Оберіть нішу для нового бота:",
+        reply_markup=_kb(
+            [_btn("🎨 Бот для майстра краси", cb="niche:BEAUTY")],
+            [_btn("👷 Бот для роботодавця",   cb="niche:LABOR")],
+            [_btn("◀️ Мій профіль",           cb="profile:home")],
         ),
     )
     await state.set_state(OnboardingFSM.select_niche)
 
 
-# ── Onboarding: niche → terms → token ────────────────────────────────────────
-
 async def got_niche(callback: types.CallbackQuery, state: FSMContext) -> None:
     niche_value = callback.data.split(":", 1)[1]
     niche = BotNiche(niche_value)
     await state.update_data(niche=niche_value)
-    example = NICHE_NAME_EXAMPLES[niche]
-
-    await callback.message.edit_text(
-        f"✅ Обрано: <b>{NICHE_LABELS[niche]}</b>\n\n"
-        f"{NAMING_RULES}\n\n"
-        "─────────────────────\n\n"
-        "<b>Умови використання платформи:</b>\n\n"
-        "• Ви надаєте технічний доступ до свого бота для роботи сервісу\n"
-        "• Платформа не читає і не зберігає переписку ваших користувачів\n"
-        "• Токен зберігається у зашифрованому вигляді\n"
-        "• Ви можете відключити бота у будь-який момент\n"
-        "• Сервіс надається на умовах підписки\n"
-        "• <b>В описі вашого бота обов'язково має бути вказано посилання на платформу</b> — це буде встановлено автоматично\n\n"
-        f"<i>Приклад назви для вашої ніші: <code>{example}</code></i>",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="✅ Розумію та погоджуюсь", callback_data="master:terms:agree")],
-            [types.InlineKeyboardButton(text="◀️ Змінити нішу",          callback_data="master:terms:back")],
-        ]),
-    )
+    await _show_terms(callback.message, niche, edit=True)
     await state.set_state(OnboardingFSM.terms)
     await callback.answer()
 
@@ -297,15 +347,8 @@ async def terms_agree(callback: types.CallbackQuery, state: FSMContext) -> None:
 
 
 async def terms_back(callback: types.CallbackQuery, state: FSMContext) -> None:
-    await callback.message.edit_text(
-        "Оберіть нішу:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=label, callback_data=f"niche:{niche.value}")]
-            for niche, label in NICHE_LABELS.items()
-        ]),
-    )
-    await state.set_state(OnboardingFSM.select_niche)
-    await callback.answer()
+    await state.clear()
+    await land_catalog(callback)
 
 
 # ── Token validation & bot registration ──────────────────────────────────────
@@ -346,7 +389,6 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
         await message.answer("❌ Не вдалося перевірити токен. Спробуйте ще раз.")
         return
 
-    # Get FSM data (including referrer_id) BEFORE clearing state
     fsm_data = await state.get_data()
     niche = BotNiche(fsm_data["niche"])
     referrer_id = fsm_data.get("referrer_id")
@@ -357,6 +399,7 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
         plain_token=plain_token,
         bot_username=bot_info.username,
         niche=niche,
+        referred_by=referrer_id,
     )
 
     try:
@@ -366,7 +409,7 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
             secret_token=settings.SECRET_WEBHOOK_TOKEN,
             allowed_updates=["message", "callback_query"],
         )
-        master_tag = f"@{app_state.master_bot_username}" if app_state.master_bot_username else "Arete"
+        master_tag = f"@{app_state.master_bot_username}" if app_state.master_bot_username else "MasterLug"
         await webhook_bot.set_my_description(
             f"Цей бот створено та підтримується через {master_tag}.\n\nНіша: {NICHE_LABELS[niche]}",
             language_code="uk",
@@ -385,39 +428,47 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
         return
 
     await state.clear()
+
+    product = PRODUCT_NAMES.get(niche, NICHE_LABELS[niche])
+
     if is_trial:
         await message.answer(
             f"🎉 <b>Ваш бот готовий!</b>\n\n"
             f"🤖 @{bot_info.username}\n"
-            f"📦 Ніша: {NICHE_LABELS[niche]}\n\n"
+            f"📦 {product}\n\n"
             f"👉 Відкрийте та протестуйте: t.me/{bot_info.username}\n\n"
             f"🎁 <b>Перший місяць — безкоштовно!</b>\n"
-            f"Після 30 днів підписка коштує {settings.SUBSCRIPTION_PRICE} грн/міс.\n"
+            f"Після 30 днів: {settings.SUBSCRIPTION_PRICE} грн/міс.\n"
             f"Ми нагадаємо за тиждень до кінця.",
         )
     else:
         card = settings.MONOBANK_CARD or "уточніть у підтримці"
+        support_hint = f"\n❓ Питання? @{settings.SUPPORT_USERNAME}" if settings.SUPPORT_USERNAME else ""
         await message.answer(
             f"✅ <b>Бот @{bot_info.username} зареєстровано!</b>\n\n"
-            f"📦 Ніша: {NICHE_LABELS[niche]}\n\n"
-            f"⏳ <b>Для активації необхідна оплата</b>\n"
-            f"Вартість: <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n\n"
-            f"💳 Monobank: <code>{card}</code>\n"
-            f"📝 Призначення: <code>MasterLug @{bot_info.username}</code>\n\n"
-            f"Після оплати напишіть нам — активуємо протягом кількох годин.",
+            f"📦 {product}\n\n"
+            f"⏳ <b>Для активації необхідна оплата</b>\n\n"
+            f"💳 <b>Monobank:</b> <code>{card}</code>\n"
+            f"💰 Сума: <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n\n"
+            f"⚠️ <b>ОБОВ'ЯЗКОВО вкажіть призначення платежу:</b>\n"
+            f"┌─────────────────────────┐\n"
+            f"  <code>MasterLug @{bot_info.username}</code>\n"
+            f"└─────────────────────────┘\n"
+            f"👆 <b>Скопіюйте та вставте цей текст при переказі!</b>\n"
+            f"<i>Без правильного призначення ми не зможемо знайти вашу оплату.</i>\n\n"
+            f"✅ Бот активується <b>автоматично</b> одразу після оплати."
+            f"{support_hint}",
         )
 
-    # Feature 3: Send step-by-step onboarding guide
-    support_line = ""
-    if settings.SUPPORT_USERNAME:
-        support_line = f"\n\n<i>Є питання? Пишіть у підтримку @{settings.SUPPORT_USERNAME}</i>"
+    # Onboarding guide
+    support_line = f"\n\n<i>Є питання? @{settings.SUPPORT_USERNAME}</i>" if settings.SUPPORT_USERNAME else ""
 
     if niche == BotNiche.LABOR:
         guide_text = (
             "📋 <b>Покрокова інструкція для старту:</b>\n\n"
             f"1️⃣ Відкрийте @{bot_info.username} → /start → <b>Панель роботодавця</b>\n"
-            f"2️⃣ Натисніть <b>➕ Нова вакансія</b> — заповніть місто, опис, оплату, час і адресу\n"
-            f"3️⃣ Поділіться посиланням з кандидатами: <code>t.me/{bot_info.username}</code>\n"
+            f"2️⃣ Натисніть <b>➕ Нова вакансія</b> — заповніть місто, опис, оплату, час\n"
+            f"3️⃣ Поділіться посиланням: <code>t.me/{bot_info.username}</code>\n"
             "4️⃣ Кандидати відгукуються → ви приймаєте одним кліком"
             f"{support_line}"
         )
@@ -426,10 +477,11 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
             "📋 <b>Покрокова інструкція для старту:</b>\n\n"
             f"1️⃣ Відкрийте @{bot_info.username} → /start → <b>Адмін-панель</b>\n"
             "   ⚙️ Налаштування → 👋 Привітання — введіть свій текст\n"
-            "2️⃣ Натисніть <b>➕ Додати роботу</b> — завантажте фото з описом і ціною\n"
+            "2️⃣ Натисніть <b>➕ Додати роботу</b> — завантажте фото з описом\n"
             "3️⃣ ⚙️ → 🕐 Час роботи — налаштуйте слоти (10:00, 12:00...)\n"
             f"4️⃣ Поділіться посиланням: <code>t.me/{bot_info.username}</code>\n\n"
             "<i>Клієнти записуватимуться самі — вам тільки підтверджувати!</i>"
+            f"{support_line}"
         )
     else:
         guide_text = None
@@ -437,7 +489,7 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
     if guide_text:
         await message.answer(guide_text)
 
-    # Notify platform owner about new registration
+    # Notify platform owner
     if settings.PLATFORM_OWNER_ID:
         try:
             from app.bot.master.dispatcher import get_master_bot
@@ -447,18 +499,18 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
                 text=(
                     f"🆕 <b>Новий бот зареєстровано!</b>\n\n"
                     f"🤖 @{bot_info.username}\n"
-                    f"📦 Ніша: {NICHE_LABELS[niche]}\n"
-                    f"👤 Owner ID: <code>{message.from_user.id}</code>\n"
-                    f"👤 @{message.from_user.username or '—'} / {message.from_user.full_name}"
+                    f"📦 {product}\n"
+                    f"👤 ID: <code>{message.from_user.id}</code> "
+                    f"@{message.from_user.username or '—'} / {message.from_user.full_name}\n"
+                    f"💳 {'🎁 Безкоштовний тріал 30 дн.' if is_trial else '⏳ Очікує оплати'}"
                 ),
             )
         except Exception:
             pass
 
-    # Feature 8: Referral bonus
+    # Referral bonus
     if referrer_id:
         from app.core.database import AsyncSessionLocal
-        from datetime import timedelta
         async with AsyncSessionLocal() as ref_session:
             ref_bots_res = await ref_session.execute(
                 select(RegisteredBot).where(
@@ -482,7 +534,7 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
                     pass
 
 
-# ── My Profile ───────────────────────────────────────────────────────────────
+# ── My Profile ────────────────────────────────────────────────────────────────
 
 NICHE_EMOJI = {
     BotNiche.LABOR:  "💼",
@@ -498,7 +550,7 @@ def _sub_status(bot: RegisteredBot) -> str:
         return "🟢 Активний"
     now = datetime.now(timezone.utc)
     if bot.subscription_expires_at <= now:
-        return "🔴 Підписка прострочена"
+        return "🔴 Прострочена"
     days = (bot.subscription_expires_at - now).days
     date_str = bot.subscription_expires_at.strftime("%d.%m.%Y")
     if days <= 7:
@@ -506,35 +558,68 @@ def _sub_status(bot: RegisteredBot) -> str:
     return f"🟢 до {date_str}"
 
 
-async def _show_my_bots(message: types.Message, bots: list, user_id: int = 0) -> None:
+def _profile_kb(bots: list, user_id: int) -> types.InlineKeyboardMarkup:
     rows = []
     for bot in bots:
         emoji = NICHE_EMOJI.get(bot.niche, "🤖")
         status = _sub_status(bot)
-        rows.append([types.InlineKeyboardButton(
-            text=f"{emoji} @{bot.bot_username} — {status}",
-            callback_data=f"profile:bot:{bot.id}",
-        )])
-    rows.append([types.InlineKeyboardButton(text="➕ Додати ще бота", callback_data="profile:new")])
-
-    # Feature 8: Referral button
+        rows.append([_btn(f"{emoji} @{bot.bot_username} — {status}", cb=f"profile:bot:{bot.id}")])
+    rows.append([_btn("➕ Додати ще бота", cb="profile:new")])
     if app_state.master_bot_username and user_id:
-        ref_link = f"https://t.me/{app_state.master_bot_username}?start=ref_{user_id}"
-        rows.append([types.InlineKeyboardButton(
-            text="📤 Запросити друга → +30 днів",
-            url=ref_link,
-        )])
-
-    # Feature 2: Support button
+        rows.append([_btn("📤 Запросити друга → +30 днів", cb="referral:info")])
     if settings.SUPPORT_USERNAME:
-        rows.append([types.InlineKeyboardButton(
-            text="💬 Підтримка",
-            url=f"https://t.me/{settings.SUPPORT_USERNAME}",
-        )])
+        rows.append([_btn("💬 Підтримка", url=f"https://t.me/{settings.SUPPORT_USERNAME}")])
+    return _kb(*rows)
 
+
+async def referral_info(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    user_id = callback.from_user.id
+    if not app_state.master_bot_username:
+        await callback.answer("Реферальна програма тимчасово недоступна", show_alert=True)
+        return
+
+    # Stats from DB — how many registered via this user's referral
+    purchases = (await session.scalar(
+        select(func.count(RegisteredBot.id)).where(RegisteredBot.referred_by == user_id)
+    )) or 0
+
+    # Stats from Redis — how many clicked the link
+    from app.core.redis_client import get_redis
+    redis = await get_redis()
+    clicks_raw = await redis.get(f"ref_clicks:{user_id}")
+    clicks = int(clicks_raw) if clicks_raw else 0
+
+    bonus_days = purchases * 30
+
+    ref_link = f"https://t.me/{app_state.master_bot_username}?start=ref_{user_id}"
+    share_url = f"https://t.me/share/url?url={ref_link}&text=Спробуй%20MasterLug%20%E2%80%94%20Telegram-боти%20для%20бізнесу%20від%20199%20грн%2Fміс"
+
+    await _safe_edit(
+        callback.message,
+        "📤 <b>Реферальна програма</b>\n\n"
+        "🎁 <b>Умови:</b>\n"
+        "Коли друг підключить бота через ваше посилання "
+        "— вам автоматично <b>+30 днів</b> до підписки безкоштовно.\n\n"
+        "📌 Бонус зараховується одразу після реєстрації друга.\n"
+        "📌 Кількість запрошених не обмежена.\n\n"
+        f"📊 <b>Ваша статистика:</b>\n"
+        f"👆 Переходів по посиланню: <b>{clicks}</b>\n"
+        f"🤖 Зареєстрували бота: <b>{purchases}</b>\n"
+        f"🎁 Нараховано бонусів: <b>+{bonus_days} днів</b>\n\n"
+        f"🔗 <b>Ваше посилання:</b>\n<code>{ref_link}</code>\n\n"
+        "<i>Натисніть посилання вище щоб скопіювати.</i>",
+        reply_markup=_kb(
+            [_btn("📨 Поділитись посиланням", url=share_url)],
+            [_btn("◀️ Мій профіль", cb="profile:home")],
+        ),
+    )
+    await callback.answer()
+
+
+async def _show_my_bots(message: types.Message, bots: list, user_id: int = 0) -> None:
     await message.answer(
         "👤 <b>Мій профіль</b>\n\nВаші боти:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        reply_markup=_profile_kb(bots, user_id),
     )
 
 
@@ -548,36 +633,10 @@ async def profile_home(callback: types.CallbackQuery, session: AsyncSession) -> 
         await callback.answer()
         return
 
-    rows = []
-    for bot in bots:
-        emoji = NICHE_EMOJI.get(bot.niche, "🤖")
-        status = _sub_status(bot)
-        rows.append([types.InlineKeyboardButton(
-            text=f"{emoji} @{bot.bot_username} — {status}",
-            callback_data=f"profile:bot:{bot.id}",
-        )])
-    rows.append([types.InlineKeyboardButton(text="➕ Додати ще бота", callback_data="profile:new")])
-
-    # Feature 8: Referral button
-    user_id = callback.from_user.id
-    if app_state.master_bot_username:
-        ref_link = f"https://t.me/{app_state.master_bot_username}?start=ref_{user_id}"
-        rows.append([types.InlineKeyboardButton(
-            text="📤 Запросити друга → +30 днів",
-            url=ref_link,
-        )])
-
-    # Feature 2: Support button
-    if settings.SUPPORT_USERNAME:
-        rows.append([types.InlineKeyboardButton(
-            text="💬 Підтримка",
-            url=f"https://t.me/{settings.SUPPORT_USERNAME}",
-        )])
-
     await _safe_edit(
         callback.message,
         "👤 <b>Мій профіль</b>\n\nВаші боти:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        reply_markup=_profile_kb(bots, callback.from_user.id),
     )
     await callback.answer()
 
@@ -592,6 +651,7 @@ async def profile_bot_detail(callback: types.CallbackQuery, session: AsyncSessio
 
     now = datetime.now(timezone.utc)
     emoji = NICHE_EMOJI.get(bot.niche, "🤖")
+    product = PRODUCT_NAMES.get(bot.niche, NICHE_LABELS[bot.niche])
 
     sub_valid = bot.is_active and (
         bot.subscription_expires_at is None or bot.subscription_expires_at > now
@@ -608,7 +668,6 @@ async def profile_bot_detail(callback: types.CallbackQuery, session: AsyncSessio
         date_str = bot.subscription_expires_at.strftime("%d.%m.%Y")
         sub_line = f"🟢 <b>Активний до {date_str}</b> ({days} дн.)"
 
-    # Feature 7: Query stats
     from datetime import date
     from app.models.tattoo import BotSubscription, TattooBooking
     from app.models.job import Job
@@ -640,55 +699,48 @@ async def profile_bot_detail(callback: types.CallbackQuery, session: AsyncSessio
 
     text = (
         f"{emoji} <b>@{bot.bot_username}</b>\n\n"
-        f"📦 Ніша: {NICHE_LABELS[bot.niche]}\n"
+        f"📦 {product}\n"
         f"📅 Зареєстровано: {bot.created_at.strftime('%d.%m.%Y')}\n"
         f"💳 Підписка: {sub_line}\n"
         f"\n👥 Підписників: <b>{subs}</b>\n{stat_line}"
     )
 
-    # Show payment instructions if not active or expiring soon
     needs_payment = (
         not bot.is_active
-        or bot.subscription_expires_at is None and not bot.is_active
         or (bot.subscription_expires_at and (bot.subscription_expires_at - now).days <= 7)
     )
     if needs_payment and settings.MONOBANK_CARD:
-        card = settings.MONOBANK_CARD
         text += (
-            f"\n\n💳 <b>Оплата підписки:</b> {settings.SUBSCRIPTION_PRICE} грн/міс\n"
-            f"Monobank: <code>{card}</code>\n"
-            f"Призначення: <code>MasterLug @{bot.bot_username}</code>\n\n"
-            f"<i>Після оплати напишіть нам — активуємо вручну.</i>"
+            f"\n\n━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💳 <b>Monobank:</b> <code>{settings.MONOBANK_CARD}</code>\n"
+            f"💰 Сума: <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n\n"
+            f"⚠️ <b>ОБОВ'ЯЗКОВО призначення платежу:</b>\n"
+            f"┌─────────────────────────┐\n"
+            f"  <code>MasterLug @{bot.bot_username}</code>\n"
+            f"└─────────────────────────┘\n"
+            f"👆 <b>Скопіюйте та вставте при переказі!</b>\n"
+            f"✅ Бот активується <b>автоматично</b> одразу після оплати."
         )
 
-    # Feature 1: Build toggle button
     kb_rows = []
     if bot.is_active and sub_valid:
-        kb_rows.append([types.InlineKeyboardButton(
-            text="⏸ Призупинити бот",
-            callback_data=f"profile:pause:{bot_id}",
-        )])
+        kb_rows.append([_btn("⏸ Призупинити бот", cb=f"profile:pause:{bot_id}")])
     elif not bot.is_active:
-        # Only show resume if subscription not expired
         sub_not_expired = (
             bot.subscription_expires_at is None
             or bot.subscription_expires_at > now
         )
         if sub_not_expired:
-            kb_rows.append([types.InlineKeyboardButton(
-                text="▶️ Увімкнути бот",
-                callback_data=f"profile:resume:{bot_id}",
-            )])
+            kb_rows.append([_btn("▶️ Увімкнути бот", cb=f"profile:resume:{bot_id}")])
+    kb_rows.append([_btn("◀️ Мої боти", cb="profile:home")])
 
-    kb_rows.append([types.InlineKeyboardButton(text="◀️ Мої боти", callback_data="profile:home")])
-    kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
-    await _safe_edit(callback.message, text, reply_markup=kb)
+    await _safe_edit(callback.message, text, reply_markup=_kb(*kb_rows))
     await callback.answer()
 
 
 async def profile_toggle_bot(callback: types.CallbackQuery, session: AsyncSession) -> None:
     parts = callback.data.split(":")
-    action = parts[1]  # "pause" or "resume"
+    action = parts[1]
     bot_id = int(parts[2])
 
     bot = await session.get(RegisteredBot, bot_id)
@@ -703,7 +755,6 @@ async def profile_toggle_bot(callback: types.CallbackQuery, session: AsyncSessio
         await session.commit()
         await callback.answer("⏸ Бот призупинено", show_alert=True)
     elif action == "resume":
-        # Check subscription is still valid
         sub_valid = (
             bot.subscription_expires_at is None
             or bot.subscription_expires_at > now
@@ -715,44 +766,13 @@ async def profile_toggle_bot(callback: types.CallbackQuery, session: AsyncSessio
         await session.commit()
         await callback.answer("▶️ Бот увімкнено", show_alert=True)
 
-    # Refresh detail view
     callback.data = f"profile:bot:{bot_id}"
     await profile_bot_detail(callback, session)
 
 
 async def profile_new_bot(callback: types.CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await _show_niche_selector(callback.message, state)
-
-
-# ── Whitelist request (from landing) ─────────────────────────────────────────
-
-async def whitelist_request(callback: types.CallbackQuery, bot: Bot) -> None:
-    user = callback.from_user
-    mention = f"@{user.username}" if user.username else user.full_name
-    await _safe_edit(
-        callback.message,
-        "✅ <b>Заявку надіслано!</b>\n\n"
-        "Очікуйте підтвердження від адміністратора.\n"
-        "Зазвичай відповідаємо протягом кількох годин.",
-    )
-    try:
-        await bot.send_message(
-            chat_id=settings.PLATFORM_OWNER_ID,
-            text=(
-                f"📩 <b>Нова заявка на підключення</b>\n\n"
-                f"👤 {mention}\n"
-                f"🆔 ID: <code>{user.id}</code>\n"
-                f"Ім'я: {user.full_name}"
-            ),
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                types.InlineKeyboardButton(text="✅ Дозволити", callback_data=f"wl:approve:{user.id}:{user.full_name[:30]}"),
-                types.InlineKeyboardButton(text="❌ Відхилити", callback_data=f"wl:decline:{user.id}"),
-            ]]),
-        )
-    except Exception:
-        logger.warning("Could not notify owner about whitelist request")
-    await callback.answer()
+    await land_catalog(callback)
 
 
 # ── Owner utility: capture file_id ───────────────────────────────────────────
@@ -779,12 +799,19 @@ def register(dp: Dispatcher) -> None:
 
     # Landing navigation
     dp.callback_query.register(land_home,    F.data == "land:home")
-    dp.callback_query.register(land_labor,   F.data == "land:labor")
+    dp.callback_query.register(land_catalog, F.data == "land:catalog")
     dp.callback_query.register(land_beauty,  F.data == "land:beauty")
+    dp.callback_query.register(land_labor,   F.data == "land:labor")
     dp.callback_query.register(land_pricing, F.data == "land:pricing")
-    dp.callback_query.register(land_video,   F.data.startswith("land:video:"))
+    dp.callback_query.register(land_howto,   F.data == "land:howto")
 
-    # Owner utility: send any video to master bot → get file_id back
+    # Connect from landing (pre-selected niche → terms)
+    dp.callback_query.register(connect_from_landing, F.data.startswith("register:"))
+
+    # Referral info page
+    dp.callback_query.register(referral_info, F.data == "referral:info")
+
+    # Owner utility: send video/doc → get file_id
     dp.message.register(
         _capture_file_id,
         F.from_user.id == settings.PLATFORM_OWNER_ID,
@@ -795,16 +822,11 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(profile_home,       F.data == "profile:home")
     dp.callback_query.register(profile_bot_detail, F.data.startswith("profile:bot:"))
     dp.callback_query.register(profile_new_bot,    F.data == "profile:new")
-
-    # Feature 1: Pause/Resume toggle
     dp.callback_query.register(profile_toggle_bot, F.data.startswith("profile:pause:"))
     dp.callback_query.register(profile_toggle_bot, F.data.startswith("profile:resume:"))
 
-    # Whitelist
-    dp.callback_query.register(whitelist_request, F.data == "wl:request")
-
     # Onboarding FSM
-    dp.callback_query.register(got_niche,   F.data.startswith("niche:"),       OnboardingFSM.select_niche)
-    dp.callback_query.register(terms_agree, F.data == "master:terms:agree",    OnboardingFSM.terms)
-    dp.callback_query.register(terms_back,  F.data == "master:terms:back",     OnboardingFSM.terms)
+    dp.callback_query.register(got_niche,   F.data.startswith("niche:"),        OnboardingFSM.select_niche)
+    dp.callback_query.register(terms_agree, F.data == "master:terms:agree",     OnboardingFSM.terms)
+    dp.callback_query.register(terms_back,  F.data == "master:terms:back",      OnboardingFSM.terms)
     dp.message.register(got_token, OnboardingFSM.waiting_token)

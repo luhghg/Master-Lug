@@ -8,7 +8,7 @@ from app.core.security import encrypt_token, hash_token
 from app.models.bot import BotNiche, RegisteredBot
 
 TRIAL_DAYS  = 30
-TRIAL_LIMIT = 3   # first N clients get a free month
+TRIAL_LIMIT = 3   # first N unique clients get their first bot free
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +20,34 @@ async def register_bot(
     plain_token: str,
     bot_username: str,
     niche: BotNiche = BotNiche.LABOR,
+    referred_by: int | None = None,
 ) -> tuple[RegisteredBot, bool]:
-    """Register a new sub-bot. Returns (bot, is_trial)."""
+    """Register a new sub-bot. Returns (bot, is_trial).
+
+    Trial rules:
+    - Only the FIRST bot per owner is eligible
+    - Only if the platform has fewer than TRIAL_LIMIT unique clients so far
+    """
     from app.core.config import settings
 
-    # Count real (non-demo) bots already registered
     demo_ids = {settings.DEMO_BOT_LABOR_ID, settings.DEMO_BOT_BEAUTY_ID} - {0}
-    q = select(func.count(RegisteredBot.id))
-    if demo_ids:
-        q = q.where(RegisteredBot.id.not_in(demo_ids))
-    existing = await session.scalar(q) or 0
 
-    is_trial = existing < TRIAL_LIMIT
+    # How many bots does this owner already have?
+    owner_q = select(func.count(RegisteredBot.id)).where(
+        RegisteredBot.owner_telegram_id == owner_telegram_id
+    )
+    if demo_ids:
+        owner_q = owner_q.where(RegisteredBot.id.not_in(demo_ids))
+    owner_bot_count = await session.scalar(owner_q) or 0
+
+    # How many distinct clients are on the platform so far?
+    clients_q = select(func.count(func.distinct(RegisteredBot.owner_telegram_id)))
+    if demo_ids:
+        clients_q = clients_q.where(RegisteredBot.id.not_in(demo_ids))
+    client_count = await session.scalar(clients_q) or 0
+
+    # Trial only for first TRIAL_LIMIT clients, and only their FIRST bot
+    is_trial = owner_bot_count == 0 and client_count < TRIAL_LIMIT
 
     bot = RegisteredBot(
         owner_telegram_id=owner_telegram_id,
@@ -43,6 +59,7 @@ async def register_bot(
         subscription_expires_at=(
             datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS) if is_trial else None
         ),
+        referred_by=referred_by,
     )
     session.add(bot)
     await session.commit()

@@ -6,6 +6,7 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
+import httpx
 import sentry_sdk
 
 # asyncpg не сумісний з ProactorEventLoop (дефолт на Windows)
@@ -18,6 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.master_webhook import router as master_webhook_router
+from app.api.monobank import router as monobank_router
 from app.api.webhook import router as webhook_router
 from app.bot.master.dispatcher import get_master_bot
 from app.core import app_state
@@ -108,6 +110,27 @@ async def lifespan(app: FastAPI):
             logger.warning("Could not set commands for @%s: %s", registered.bot_username, e)
     logger.info("Sub-bot commands updated for %d bots.", len(bots))
 
+    # Register Monobank webhook (only if token is set)
+    if settings.MONOBANK_API_TOKEN:
+        mono_webhook_url = (
+            f"{settings.BASE_WEBHOOK_URL}/monobank/{settings.SECRET_WEBHOOK_TOKEN}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    "https://api.monobank.ua/personal/webhook",
+                    headers={"X-Token": settings.MONOBANK_API_TOKEN},
+                    json={"webHookUrl": mono_webhook_url},
+                )
+            if resp.status_code == 200:
+                logger.info("Monobank webhook registered: %s", mono_webhook_url)
+            else:
+                logger.warning("Monobank webhook registration failed: %s", resp.text)
+        except Exception as e:
+            logger.warning("Could not register Monobank webhook: %s", e)
+    else:
+        logger.info("MONOBANK_API_TOKEN not set — auto-payment disabled.")
+
     # Seed demo bots with sample data (only if empty)
     from app.services.demo_seed import seed_labor_demo, seed_beauty_demo
     async with AsyncSessionLocal() as session:
@@ -145,6 +168,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 app.include_router(webhook_router)
 app.include_router(master_webhook_router)
+app.include_router(monobank_router)
 
 
 @app.get("/health", tags=["ops"])

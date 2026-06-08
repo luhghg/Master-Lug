@@ -3,7 +3,6 @@ Platform owner admin panel inside the master bot.
 Only accessible to PLATFORM_OWNER_ID.
 """
 import logging
-
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, types
@@ -16,18 +15,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.bot import BotNiche, RegisteredBot
 from app.models.tattoo import TattooBooking, TattooReview, BookingStatus, ReviewStatus
-from app.models.whitelist import PlatformWhitelist
 
 logger = logging.getLogger(__name__)
 
 NICHE_EMOJI = {
-    BotNiche.LABOR:  "💼",
-    BotNiche.BEAUTY: "💅",
+    BotNiche.LABOR:  "👷",
+    BotNiche.BEAUTY: "🎨",
     BotNiche.SPORTS: "🏋️",
 }
 
+PRODUCT_NAMES = {
+    BotNiche.BEAUTY: "Бот для майстра краси",
+    BotNiche.LABOR:  "Бот для роботодавця",
+}
 
-# ── FSM ───────────────────────────────────────────────────────────────────────
 
 class PlatformBroadcastFSM(StatesGroup):
     message = State()
@@ -38,18 +39,43 @@ def _is_owner(user_id: int) -> bool:
     return user_id == settings.PLATFORM_OWNER_ID
 
 
-# ── /start → admin panel ──────────────────────────────────────────────────────
+def _panel_kb() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(text="🤖 Всі боти",          callback_data="pa:bots:0"),
+            types.InlineKeyboardButton(text="💳 Очікують оплати",    callback_data="pa:pending"),
+        ],
+        [
+            types.InlineKeyboardButton(text="📊 Аналітика",          callback_data="pa:stats"),
+            types.InlineKeyboardButton(text="📤 Реферали",           callback_data="pa:referrals:0"),
+        ],
+        [
+            types.InlineKeyboardButton(text="📣 Розсилка",           callback_data="pa:broadcast"),
+        ],
+    ])
+
+
+# ── /admin → show panel ───────────────────────────────────────────────────────
 
 async def owner_start(message: types.Message) -> None:
-    await _show_panel(message)
+    await message.answer(
+        "🛠 <b>MasterLug — Панель власника</b>",
+        reply_markup=_panel_kb(),
+    )
 
 
-# ── Bot list (paginated, 10 per page) ─────────────────────────────────────────
+async def pa_home(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text(
+        "🛠 <b>MasterLug — Панель власника</b>",
+        reply_markup=_panel_kb(),
+    )
+    await callback.answer()
 
-async def pa_bots(
-    callback: types.CallbackQuery,
-    session: AsyncSession,
-) -> None:
+
+# ── All bots (paginated) ──────────────────────────────────────────────────────
+
+async def pa_bots(callback: types.CallbackQuery, session: AsyncSession) -> None:
     page = int(callback.data.split(":")[2])
     per_page = 10
 
@@ -63,11 +89,15 @@ async def pa_bots(
     has_next = len(bots) > per_page
     bots = bots[:per_page]
 
-    total_res = await session.execute(select(func.count(RegisteredBot.id)))
-    total = total_res.scalar_one()
+    total = (await session.execute(select(func.count(RegisteredBot.id)))).scalar_one()
 
     if not bots:
-        await callback.message.edit_text("😔 Ботів ще немає.")
+        await callback.message.edit_text(
+            "😔 Ботів ще немає.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home"),
+            ]]),
+        )
         await callback.answer()
         return
 
@@ -77,7 +107,7 @@ async def pa_bots(
         emoji = NICHE_EMOJI.get(b.niche, "🤖")
         lines.append(
             f"{status} {emoji} @{b.bot_username}\n"
-            f"    👤 owner: <code>{b.owner_telegram_id}</code> | {b.created_at.strftime('%d.%m.%Y')}"
+            f"    👤 <code>{b.owner_telegram_id}</code> · {b.created_at.strftime('%d.%m.%Y')}"
         )
 
     nav = []
@@ -98,42 +128,75 @@ async def pa_bots(
     await callback.answer()
 
 
+# ── Pending payments ──────────────────────────────────────────────────────────
+
+async def pa_pending(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    demo_ids = [d for d in [settings.DEMO_BOT_LABOR_ID, settings.DEMO_BOT_BEAUTY_ID] if d]
+
+    q = select(RegisteredBot).where(RegisteredBot.is_active == False)
+    if demo_ids:
+        q = q.where(RegisteredBot.id.not_in(demo_ids))
+    q = q.order_by(RegisteredBot.created_at.desc()).limit(25)
+
+    result = await session.execute(q)
+    bots = list(result.scalars().all())
+
+    if not bots:
+        await callback.message.edit_text(
+            "✅ Немає ботів, що очікують оплати.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home"),
+            ]]),
+        )
+        await callback.answer()
+        return
+
+    rows = []
+    for b in bots:
+        emoji = NICHE_EMOJI.get(b.niche, "🤖")
+        rows.append([types.InlineKeyboardButton(
+            text=f"{emoji} @{b.bot_username} · {b.created_at.strftime('%d.%m')}",
+            callback_data=f"pa:bot:{b.id}",
+        )])
+    rows.append([types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home")])
+
+    await callback.message.edit_text(
+        f"💳 <b>Очікують оплати ({len(bots)})</b>\n\n"
+        "Натисніть на бот → <b>📅 +30 днів</b> для активації.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
 # ── Single bot detail ─────────────────────────────────────────────────────────
 
-async def pa_bot_detail(
-    callback: types.CallbackQuery,
-    session: AsyncSession,
-) -> None:
+async def pa_bot_detail(callback: types.CallbackQuery, session: AsyncSession) -> None:
     bot_id = int(callback.data.split(":")[2])
     bot = await session.get(RegisteredBot, bot_id)
     if not bot:
         await callback.answer("Бот не знайдено", show_alert=True)
         return
 
-    # Count bookings and reviews if BEAUTY
     extra = ""
     if bot.niche == BotNiche.BEAUTY:
-        bookings_res = await session.execute(
+        total_b = (await session.execute(
             select(func.count(TattooBooking.id)).where(TattooBooking.bot_id == bot_id)
-        )
-        reviews_res = await session.execute(
-            select(func.count(TattooReview.id)).where(
-                TattooReview.bot_id == bot_id,
-                TattooReview.status == ReviewStatus.APPROVED,
-            )
-        )
-        active_bookings_res = await session.execute(
+        )).scalar_one()
+        active_b = (await session.execute(
             select(func.count(TattooBooking.id)).where(
                 TattooBooking.bot_id == bot_id,
                 TattooBooking.status == BookingStatus.NEW,
             )
-        )
-        total_b = bookings_res.scalar_one()
-        approved_r = reviews_res.scalar_one()
-        active_b = active_bookings_res.scalar_one()
+        )).scalar_one()
+        approved_r = (await session.execute(
+            select(func.count(TattooReview.id)).where(
+                TattooReview.bot_id == bot_id,
+                TattooReview.status == ReviewStatus.APPROVED,
+            )
+        )).scalar_one()
         extra = (
-            f"\n\n📅 Записів всього: <b>{total_b}</b> (активних: {active_b})\n"
-            f"⭐️ Відгуків схвалено: <b>{approved_r}</b>"
+            f"\n\n📅 Записів: <b>{total_b}</b> (активних: {active_b})\n"
+            f"⭐️ Відгуків: <b>{approved_r}</b>"
         )
 
     status_text = "🟢 Активний" if bot.is_active else "🔴 Вимкнений"
@@ -148,30 +211,37 @@ async def pa_bot_detail(
     else:
         sub_text = f"🔴 Прострочена ({bot.subscription_expires_at.strftime('%d.%m.%Y')})"
 
+    product = PRODUCT_NAMES.get(bot.niche, bot.niche.value)
+    emoji = NICHE_EMOJI.get(bot.niche, "🤖")
+
     await callback.message.edit_text(
-        f"🤖 <b>@{bot.bot_username}</b>\n\n"
+        f"{emoji} <b>@{bot.bot_username}</b>\n\n"
         f"🆔 Bot ID (для .env): <code>{bot.id}</code>\n"
-        f"📦 Ніша: {NICHE_EMOJI.get(bot.niche, '')} {bot.niche.value}\n"
-        f"👤 Owner ID: <code>{bot.owner_telegram_id}</code>\n"
+        f"📦 {product}\n"
+        f"👤 Owner: <code>{bot.owner_telegram_id}</code>\n"
         f"📅 Зареєстровано: {bot.created_at.strftime('%d.%m.%Y %H:%M')}\n"
         f"💳 Підписка: {sub_text}\n"
         f"Статус: {status_text}"
         f"{extra}",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=toggle_text,      callback_data=f"pa:toggle:{bot_id}")],
-            [types.InlineKeyboardButton(text="📅 +30 днів",    callback_data=f"pa:sub_extend:{bot_id}")],
-            [types.InlineKeyboardButton(text="◀️ Список ботів", callback_data="pa:bots:0")],
+            [types.InlineKeyboardButton(text=toggle_text,          callback_data=f"pa:toggle:{bot_id}")],
+            [
+                types.InlineKeyboardButton(text="📅 +30 днів",    callback_data=f"pa:sub_extend:{bot_id}:30"),
+                types.InlineKeyboardButton(text="📅 +60 днів",    callback_data=f"pa:sub_extend:{bot_id}:60"),
+                types.InlineKeyboardButton(text="📅 +90 днів",    callback_data=f"pa:sub_extend:{bot_id}:90"),
+            ],
+            [
+                types.InlineKeyboardButton(text="◀️ Всі боти",    callback_data="pa:bots:0"),
+                types.InlineKeyboardButton(text="🏠 Панель",      callback_data="pa:home"),
+            ],
         ]),
     )
     await callback.answer()
 
 
-# ── Toggle bot active/inactive ────────────────────────────────────────────────
+# ── Toggle active ─────────────────────────────────────────────────────────────
 
-async def pa_toggle(
-    callback: types.CallbackQuery,
-    session: AsyncSession,
-) -> None:
+async def pa_toggle(callback: types.CallbackQuery, session: AsyncSession) -> None:
     bot_id = int(callback.data.split(":")[2])
     bot = await session.get(RegisteredBot, bot_id)
     if not bot:
@@ -180,10 +250,9 @@ async def pa_toggle(
 
     bot.is_active = not bot.is_active
     await session.commit()
-    state = "увімкнено 🟢" if bot.is_active else "вимкнено 🔴"
-    await callback.answer(f"@{bot.bot_username} {state}", show_alert=True)
+    state_str = "увімкнено 🟢" if bot.is_active else "вимкнено 🔴"
+    await callback.answer(f"@{bot.bot_username} {state_str}", show_alert=True)
 
-    # Refresh detail view
     callback.data = f"pa:bot:{bot_id}"
     await pa_bot_detail(callback, session)
 
@@ -195,7 +264,10 @@ async def pa_sub_extend(
     session: AsyncSession,
     bot: Bot,
 ) -> None:
-    bot_id = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    bot_id = int(parts[2])
+    days = int(parts[3]) if len(parts) > 3 else 30
+
     reg_bot = await session.get(RegisteredBot, bot_id)
     if not reg_bot:
         await callback.answer("Бот не знайдено", show_alert=True)
@@ -203,14 +275,13 @@ async def pa_sub_extend(
 
     now = datetime.now(timezone.utc)
     base = max(reg_bot.subscription_expires_at or now, now)
-    reg_bot.subscription_expires_at = base + timedelta(days=30)
+    reg_bot.subscription_expires_at = base + timedelta(days=days)
     reg_bot.is_active = True
     await session.commit()
 
     new_date = reg_bot.subscription_expires_at.strftime("%d.%m.%Y")
-    await callback.answer(f"✅ Підписку продовжено до {new_date}", show_alert=True)
+    await callback.answer(f"✅ +{days} днів. Підписка до {new_date}", show_alert=True)
 
-    # Notify bot owner
     try:
         await bot.send_message(
             chat_id=reg_bot.owner_telegram_id,
@@ -226,16 +297,82 @@ async def pa_sub_extend(
     await pa_bot_detail(callback, session)
 
 
-# ── Platform-wide stats ───────────────────────────────────────────────────────
+# ── Referral report ──────────────────────────────────────────────────────────
 
-async def pa_stats(
-    callback: types.CallbackQuery,
-    session: AsyncSession,
-) -> None:
+async def pa_referrals(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    page = int(callback.data.split(":")[2])
+    per_page = 8
+
+    demo_ids = [d for d in [settings.DEMO_BOT_LABOR_ID, settings.DEMO_BOT_BEAUTY_ID] if d]
+
+    # Get all bots that have a referrer, grouped by referrer
+    q = select(RegisteredBot).where(RegisteredBot.referred_by != None)
+    if demo_ids:
+        q = q.where(RegisteredBot.id.not_in(demo_ids))
+    q = q.order_by(RegisteredBot.created_at.desc())
+
+    result = await session.execute(q)
+    all_referred = list(result.scalars().all())
+
+    if not all_referred:
+        await callback.message.edit_text(
+            "📤 <b>Реферали</b>\n\nПоки що ніхто не залучив клієнтів через реферальне посилання.",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home"),
+            ]]),
+        )
+        await callback.answer()
+        return
+
+    # Group by referrer
+    by_referrer: dict[int, list[RegisteredBot]] = {}
+    for bot in all_referred:
+        by_referrer.setdefault(bot.referred_by, []).append(bot)
+
+    referrers = list(by_referrer.items())
+    total = len(referrers)
+    slice_ = referrers[page * per_page: (page + 1) * per_page]
+    has_next = len(referrers) > (page + 1) * per_page
+
+    from app.core.redis_client import get_redis
+    redis = await get_redis()
+
+    lines = []
+    for referrer_id, bots in slice_:
+        clicks_raw = await redis.get(f"ref_clicks:{referrer_id}")
+        clicks = int(clicks_raw) if clicks_raw else 0
+        bot_list = ", ".join(f"@{b.bot_username}" for b in bots)
+        lines.append(
+            f"👤 <code>{referrer_id}</code>\n"
+            f"  👆 Кліків: {clicks} · 🤖 Куплено: {len(bots)}\n"
+            f"  {bot_list}"
+        )
+
+    nav = []
+    if page > 0:
+        nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"pa:referrals:{page - 1}"))
+    if has_next:
+        nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"pa:referrals:{page + 1}"))
+
+    rows = [nav] if nav else []
+    rows.append([types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home")])
+
+    await callback.message.edit_text(
+        f"📤 <b>Реферальна статистика</b> (рефереров: {total})\n\n"
+        + "\n\n".join(lines),
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+# ── Platform stats ────────────────────────────────────────────────────────────
+
+async def pa_stats(callback: types.CallbackQuery, session: AsyncSession) -> None:
     total_bots = (await session.execute(select(func.count(RegisteredBot.id)))).scalar_one()
     active_bots = (await session.execute(
         select(func.count(RegisteredBot.id)).where(RegisteredBot.is_active == True)
     )).scalar_one()
+    pending_bots = total_bots - active_bots
 
     by_niche = await session.execute(
         select(RegisteredBot.niche, func.count(RegisteredBot.id).label("cnt"))
@@ -251,142 +388,25 @@ async def pa_stats(
     )).scalar_one()
 
     niche_lines = "\n".join(
-        f"  {NICHE_EMOJI.get(row.niche, '🤖')} {row.niche.value}: {row.cnt}"
+        f"  {NICHE_EMOJI.get(row.niche, '🤖')} {PRODUCT_NAMES.get(row.niche, row.niche.value)}: {row.cnt}"
         for row in by_niche.all()
     ) or "  —"
 
+    monthly_revenue = active_bots * settings.SUBSCRIPTION_PRICE
+
     await callback.message.edit_text(
-        f"📊 <b>MasterLug — Загальна аналітика</b>\n\n"
-        f"🤖 Ботів всього: <b>{total_bots}</b> (активних: {active_bots})\n\n"
-        f"По нішах:\n{niche_lines}\n\n"
-        f"📅 Записів (Beauty): <b>{total_bookings}</b> (активних: {active_bookings})\n"
+        f"📊 <b>MasterLug — Аналітика</b>\n\n"
+        f"🤖 Ботів всього: <b>{total_bots}</b>\n"
+        f"  🟢 Активних: {active_bots} · 🔴 Очікують: {pending_bots}\n\n"
+        f"По типах:\n{niche_lines}\n\n"
+        f"💰 Орієнтовна виручка: <b>{monthly_revenue} грн/міс</b>\n\n"
+        f"📅 Записів (Beauty): <b>{total_bookings}</b> (нових: {active_bookings})\n"
         f"⭐️ Відгуків схвалено: <b>{total_reviews}</b>",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home")],
-        ]),
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home"),
+        ]]),
     )
     await callback.answer()
-
-
-# ── Whitelist approve / decline ───────────────────────────────────────────────
-
-async def wl_approve(
-    callback: types.CallbackQuery,
-    session: AsyncSession,
-    bot: Bot,
-) -> None:
-    parts = callback.data.split(":")  # wl:approve:telegram_id:name
-    telegram_id = int(parts[2])
-    name = parts[3] if len(parts) > 3 else "Клієнт"
-
-    existing = await session.execute(
-        select(PlatformWhitelist).where(PlatformWhitelist.telegram_id == telegram_id)
-    )
-    if not existing.scalar_one_or_none():
-        session.add(PlatformWhitelist(telegram_id=telegram_id, full_name=name))
-        await session.commit()
-
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.answer(f"✅ {name} додано до whitelist", show_alert=True)
-
-    try:
-        await bot.send_message(
-            chat_id=telegram_id,
-            text=(
-                "✅ <b>Вашу заявку схвалено!</b>\n\n"
-                "Тепер ви можете зареєструвати свого бота.\n"
-                "Натисніть /start щоб продовжити."
-            ),
-        )
-    except Exception:
-        logger.warning("Could not notify approved user %s", telegram_id)
-
-
-async def wl_decline(callback: types.CallbackQuery, bot: Bot) -> None:
-    telegram_id = int(callback.data.split(":")[2])
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.answer("❌ Заявку відхилено", show_alert=True)
-    try:
-        await bot.send_message(
-            chat_id=telegram_id,
-            text="❌ На жаль, вашу заявку відхилено. Зв'яжіться з адміністратором для деталей.",
-        )
-    except Exception:
-        pass
-
-
-async def pa_whitelist(callback: types.CallbackQuery, session: AsyncSession) -> None:
-    result = await session.execute(
-        select(PlatformWhitelist).order_by(PlatformWhitelist.added_at.desc())
-    )
-    users = list(result.scalars().all())
-    if not users:
-        await callback.message.edit_text(
-            "👥 Whitelist порожній.",
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home")
-            ]]),
-        )
-        await callback.answer()
-        return
-
-    lines = []
-    for u in users:
-        mention = f"@{u.username}" if u.username else u.full_name or "—"
-        lines.append(f"• {mention} <code>{u.telegram_id}</code>")
-
-    rows = [[types.InlineKeyboardButton(
-        text=f"🗑 {u.full_name or u.telegram_id}",
-        callback_data=f"wl:remove:{u.telegram_id}",
-    )] for u in users]
-    rows.append([types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home")])
-
-    await callback.message.edit_text(
-        f"👥 <b>Whitelist ({len(users)})</b>\n\n" + "\n".join(lines),
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await callback.answer()
-
-
-async def wl_remove(callback: types.CallbackQuery, session: AsyncSession) -> None:
-    telegram_id = int(callback.data.split(":")[2])
-    result = await session.execute(
-        select(PlatformWhitelist).where(PlatformWhitelist.telegram_id == telegram_id)
-    )
-    entry = result.scalar_one_or_none()
-    if entry:
-        await session.delete(entry)
-        await session.commit()
-        await callback.answer("🗑 Видалено з whitelist", show_alert=True)
-    await pa_whitelist(callback, session)
-
-
-# ── Home ──────────────────────────────────────────────────────────────────────
-
-async def pa_home(callback: types.CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await callback.message.edit_text(
-        "🛠 <b>MasterLug — Панель власника платформи</b>",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🤖 Всі боти",           callback_data="pa:bots:0")],
-            [types.InlineKeyboardButton(text="📊 Загальна аналітика", callback_data="pa:stats")],
-            [types.InlineKeyboardButton(text="👥 Whitelist",          callback_data="pa:whitelist")],
-            [types.InlineKeyboardButton(text="📣 Розсилка",           callback_data="pa:broadcast")],
-        ]),
-    )
-    await callback.answer()
-
-
-async def _show_panel(message: types.Message) -> None:
-    await message.answer(
-        "🛠 <b>MasterLug — Панель власника платформи</b>",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🤖 Всі боти",           callback_data="pa:bots:0")],
-            [types.InlineKeyboardButton(text="📊 Загальна аналітика", callback_data="pa:stats")],
-            [types.InlineKeyboardButton(text="👥 Whitelist",          callback_data="pa:whitelist")],
-            [types.InlineKeyboardButton(text="📣 Розсилка",           callback_data="pa:broadcast")],
-        ]),
-    )
 
 
 # ── Platform Broadcast FSM ────────────────────────────────────────────────────
@@ -395,8 +415,7 @@ async def pa_broadcast_start(callback: types.CallbackQuery, state: FSMContext) -
     await state.clear()
     await callback.message.edit_text(
         "📣 <b>Платформна розсилка</b>\n\n"
-        "Надішліть текст для розсилки всім власникам ботів.\n"
-        "(підтримується фото з підписом)",
+        "Надішліть текст або фото з підписом для розсилки всім власникам ботів.",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
             types.InlineKeyboardButton(text="❌ Скасувати", callback_data="pa:broadcast_cancel"),
         ]]),
@@ -420,7 +439,7 @@ async def pa_broadcast_got(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     preview = (data["pa_broadcast_text"] or "(фото без підпису)")[:300]
     await message.answer(
-        f"📋 <b>Попередній перегляд розсилки:</b>\n\n{preview}",
+        f"📋 <b>Попередній перегляд:</b>\n\n{preview}",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
             types.InlineKeyboardButton(text="✅ Розіслати всім", callback_data="pa:broadcast_confirm"),
             types.InlineKeyboardButton(text="❌ Скасувати",      callback_data="pa:broadcast_cancel"),
@@ -440,17 +459,10 @@ async def pa_broadcast_confirm(
     text = data.get("pa_broadcast_text", "")
     await state.clear()
 
-    # Get all distinct owner_telegram_ids, excluding demo bots
-    demo_ids = []
-    if settings.DEMO_BOT_LABOR_ID:
-        demo_ids.append(settings.DEMO_BOT_LABOR_ID)
-    if settings.DEMO_BOT_BEAUTY_ID:
-        demo_ids.append(settings.DEMO_BOT_BEAUTY_ID)
-
+    demo_ids = [d for d in [settings.DEMO_BOT_LABOR_ID, settings.DEMO_BOT_BEAUTY_ID] if d]
     query = select(RegisteredBot.owner_telegram_id).distinct()
     if demo_ids:
         query = query.where(RegisteredBot.id.not_in(demo_ids))
-
     result = await session.execute(query)
     recipients = [row[0] for row in result.all()]
 
@@ -466,7 +478,7 @@ async def pa_broadcast_confirm(
             failed += 1
 
     await callback.message.edit_text(
-        f"✅ <b>Платформну розсилку завершено!</b>\n\n"
+        f"✅ <b>Розсилку завершено!</b>\n\n"
         f"📤 Надіслано: {sent}\n❌ Помилок: {failed}",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
             types.InlineKeyboardButton(text="◀️ Назад", callback_data="pa:home"),
@@ -489,35 +501,20 @@ async def pa_broadcast_cancel(callback: types.CallbackQuery, state: FSMContext) 
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def register(dp: Dispatcher) -> None:
-    dp.message.register(owner_start, Command("admin"), F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(pa_home,       F.data == "pa:home",               F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(pa_bots,       F.data.startswith("pa:bots:"),      F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(pa_bot_detail, F.data.startswith("pa:bot:"),       F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(pa_toggle,      F.data.startswith("pa:toggle:"),     F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(pa_sub_extend, F.data.startswith("pa:sub_extend:"), F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(pa_stats,      F.data == "pa:stats",               F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(pa_whitelist,  F.data == "pa:whitelist",           F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(wl_remove,     F.data.startswith("wl:remove:"),    F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(wl_approve,    F.data.startswith("wl:approve:"),   F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(wl_decline,    F.data.startswith("wl:decline:"),   F.from_user.id == settings.PLATFORM_OWNER_ID)
-    dp.callback_query.register(lambda c: c.answer(), F.data == "pa:noop")
+    owner = F.from_user.id == settings.PLATFORM_OWNER_ID
 
-    # Platform Broadcast FSM
-    dp.callback_query.register(
-        pa_broadcast_start, F.data == "pa:broadcast",
-        F.from_user.id == settings.PLATFORM_OWNER_ID,
-    )
-    dp.message.register(
-        pa_broadcast_got,
-        PlatformBroadcastFSM.message,
-        F.from_user.id == settings.PLATFORM_OWNER_ID,
-    )
-    dp.callback_query.register(
-        pa_broadcast_confirm, F.data == "pa:broadcast_confirm",
-        PlatformBroadcastFSM.confirm,
-        F.from_user.id == settings.PLATFORM_OWNER_ID,
-    )
-    dp.callback_query.register(
-        pa_broadcast_cancel, F.data == "pa:broadcast_cancel",
-        F.from_user.id == settings.PLATFORM_OWNER_ID,
-    )
+    dp.message.register(owner_start, Command("admin"), owner)
+    dp.callback_query.register(pa_home,       F.data == "pa:home",               owner)
+    dp.callback_query.register(pa_bots,       F.data.startswith("pa:bots:"),     owner)
+    dp.callback_query.register(pa_pending,    F.data == "pa:pending",            owner)
+    dp.callback_query.register(pa_bot_detail, F.data.startswith("pa:bot:"),      owner)
+    dp.callback_query.register(pa_toggle,     F.data.startswith("pa:toggle:"),   owner)
+    dp.callback_query.register(pa_sub_extend, F.data.startswith("pa:sub_extend:"), owner)
+    dp.callback_query.register(pa_stats,      F.data == "pa:stats",                  owner)
+    dp.callback_query.register(pa_referrals,  F.data.startswith("pa:referrals:"),    owner)
+    dp.callback_query.register(lambda c: c.answer(), F.data == "pa:noop",        owner)
+
+    dp.callback_query.register(pa_broadcast_start,   F.data == "pa:broadcast",         owner)
+    dp.message.register(pa_broadcast_got,            PlatformBroadcastFSM.message,     owner)
+    dp.callback_query.register(pa_broadcast_confirm, F.data == "pa:broadcast_confirm", PlatformBroadcastFSM.confirm, owner)
+    dp.callback_query.register(pa_broadcast_cancel,  F.data == "pa:broadcast_cancel",  owner)
