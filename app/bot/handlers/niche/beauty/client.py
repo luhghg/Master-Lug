@@ -178,8 +178,6 @@ async def _show_portfolio_page(
     cat_name = next((c["name"] for c in cats if c["key"] == style_key), style_key)
 
     base_filter = [TattooPortfolio.bot_id == bot_id, TattooPortfolio.style == style_key]
-    if is_demo_bot(bot_id):
-        base_filter.append(TattooPortfolio.demo_owner_id.is_(None))
     result = await session.execute(
         select(TattooPortfolio)
         .where(*base_filter)

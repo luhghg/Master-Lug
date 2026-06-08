@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.handlers.niche.beauty.calendar_widget import make_calendar
@@ -484,15 +484,9 @@ async def portfolio_got_price(
 async def _admin_portfolio_list(
     message: types.Message, session: AsyncSession, bot_id: int, user_id: int = 0,
 ) -> None:
-    base_filter = [TattooPortfolio.bot_id == bot_id]
-    if is_demo_bot(bot_id) and user_id:
-        base_filter.append(or_(
-            TattooPortfolio.demo_owner_id.is_(None),
-            TattooPortfolio.demo_owner_id == user_id,
-        ))
     result = await session.execute(
         select(TattooPortfolio.style, func.count(TattooPortfolio.id).label("cnt"))
-        .where(*base_filter)
+        .where(TattooPortfolio.bot_id == bot_id)
         .group_by(TattooPortfolio.style)
     )
     rows = result.all()
@@ -520,15 +514,9 @@ async def admin_portfolio_browse(
 ) -> None:
     _, style_key, idx_str = callback.data.split(":")
     idx = int(idx_str)
-    base_filter = [TattooPortfolio.bot_id == registered_bot_id, TattooPortfolio.style == style_key]
-    if is_demo_bot(registered_bot_id):
-        base_filter.append(or_(
-            TattooPortfolio.demo_owner_id.is_(None),
-            TattooPortfolio.demo_owner_id == callback.from_user.id,
-        ))
     result = await session.execute(
         select(TattooPortfolio)
-        .where(*base_filter)
+        .where(TattooPortfolio.bot_id == registered_bot_id, TattooPortfolio.style == style_key)
         .order_by(TattooPortfolio.created_at)
     )
     works = list(result.scalars().all())
