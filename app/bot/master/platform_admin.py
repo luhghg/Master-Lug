@@ -224,19 +224,97 @@ async def pa_bot_detail(callback: types.CallbackQuery, session: AsyncSession) ->
         f"Статус: {status_text}"
         f"{extra}",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=toggle_text,          callback_data=f"pa:toggle:{bot_id}")],
+            [types.InlineKeyboardButton(text=toggle_text,                   callback_data=f"pa:toggle:{bot_id}")],
             [
-                types.InlineKeyboardButton(text="📅 +30 днів",    callback_data=f"pa:sub_extend:{bot_id}:30"),
-                types.InlineKeyboardButton(text="📅 +60 днів",    callback_data=f"pa:sub_extend:{bot_id}:60"),
-                types.InlineKeyboardButton(text="📅 +90 днів",    callback_data=f"pa:sub_extend:{bot_id}:90"),
+                types.InlineKeyboardButton(text="📅 +30 днів",             callback_data=f"pa:sub_extend:{bot_id}:30"),
+                types.InlineKeyboardButton(text="📅 +60 днів",             callback_data=f"pa:sub_extend:{bot_id}:60"),
+                types.InlineKeyboardButton(text="📅 +90 днів",             callback_data=f"pa:sub_extend:{bot_id}:90"),
             ],
+            [types.InlineKeyboardButton(text="💳 Надіслати запит на оплату", callback_data=f"pa:pay_request:{bot_id}")],
+            [types.InlineKeyboardButton(text="🗑 Видалити бот",            callback_data=f"pa:delete_confirm:{bot_id}")],
             [
-                types.InlineKeyboardButton(text="◀️ Всі боти",    callback_data="pa:bots:0"),
-                types.InlineKeyboardButton(text="🏠 Панель",      callback_data="pa:home"),
+                types.InlineKeyboardButton(text="◀️ Всі боти",             callback_data="pa:bots:0"),
+                types.InlineKeyboardButton(text="🏠 Панель",               callback_data="pa:home"),
             ],
         ]),
     )
     await callback.answer()
+
+
+# ── Delete bot (with confirmation) ───────────────────────────────────────────
+
+async def pa_delete_confirm(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    bot_id = int(callback.data.split(":")[2])
+    bot = await session.get(RegisteredBot, bot_id)
+    if not bot:
+        await callback.answer("Бот не знайдено", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"⚠️ <b>Підтвердіть видалення</b>\n\n"
+        f"🤖 @{bot.bot_username}\n"
+        f"👤 Owner: <code>{bot.owner_telegram_id}</code>\n\n"
+        f"Це видалить бота та всі пов'язані дані <b>назавжди</b>.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text="🗑 Так, видалити", callback_data=f"pa:delete_do:{bot_id}"),
+                types.InlineKeyboardButton(text="❌ Скасувати",      callback_data=f"pa:bot:{bot_id}"),
+            ],
+        ]),
+    )
+    await callback.answer()
+
+
+async def pa_delete_do(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    bot_id = int(callback.data.split(":")[2])
+    bot = await session.get(RegisteredBot, bot_id)
+    if not bot:
+        await callback.answer("Бот не знайдено", show_alert=True)
+        return
+
+    username = bot.bot_username
+    await session.delete(bot)
+    await session.commit()
+    logger.info("Deleted bot @%s (id=%s) by platform owner", username, bot_id)
+
+    await callback.answer(f"✅ @{username} видалено", show_alert=True)
+    callback.data = "pa:bots:0"
+    await pa_bots(callback, session)
+
+
+# ── Send Monobank payment request ────────────────────────────────────────────
+
+async def pa_pay_request(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
+    bot_id = int(callback.data.split(":")[2])
+    reg_bot = await session.get(RegisteredBot, bot_id)
+    if not reg_bot:
+        await callback.answer("Бот не знайдено", show_alert=True)
+        return
+
+    card = settings.MONOBANK_CARD or "—"
+    price = settings.SUBSCRIPTION_PRICE
+    username = reg_bot.bot_username
+
+    text = (
+        f"💳 <b>Запит на оплату підписки</b>\n\n"
+        f"🤖 Бот: @{username}\n"
+        f"💰 Сума: <b>{price} грн</b>\n\n"
+        f"Картка для оплати:\n"
+        f"<code>{card}</code>\n\n"
+        f"‼️ <b>Призначення платежу (обов'язково!):</b>\n"
+        f"<code>MasterLug @{username}</code>\n\n"
+        f"Після оплати бот буде активований автоматично протягом кількох хвилин."
+    )
+    try:
+        await bot.send_message(chat_id=reg_bot.owner_telegram_id, text=text)
+        await callback.answer("✅ Запит надіслано власнику бота", show_alert=True)
+    except Exception as e:
+        logger.warning("pa_pay_request: could not notify owner %s: %s", reg_bot.owner_telegram_id, e)
+        await callback.answer("❌ Не вдалося надіслати повідомлення власнику", show_alert=True)
 
 
 # ── Toggle active ─────────────────────────────────────────────────────────────
@@ -509,8 +587,11 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(pa_pending,    F.data == "pa:pending",            owner)
     dp.callback_query.register(pa_bot_detail, F.data.startswith("pa:bot:"),      owner)
     dp.callback_query.register(pa_toggle,     F.data.startswith("pa:toggle:"),   owner)
-    dp.callback_query.register(pa_sub_extend, F.data.startswith("pa:sub_extend:"), owner)
-    dp.callback_query.register(pa_stats,      F.data == "pa:stats",                  owner)
+    dp.callback_query.register(pa_sub_extend,   F.data.startswith("pa:sub_extend:"),  owner)
+    dp.callback_query.register(pa_pay_request,    F.data.startswith("pa:pay_request:"),    owner)
+    dp.callback_query.register(pa_delete_confirm, F.data.startswith("pa:delete_confirm:"), owner)
+    dp.callback_query.register(pa_delete_do,      F.data.startswith("pa:delete_do:"),      owner)
+    dp.callback_query.register(pa_stats,          F.data == "pa:stats",                    owner)
     dp.callback_query.register(pa_referrals,  F.data.startswith("pa:referrals:"),    owner)
     dp.callback_query.register(lambda c: c.answer(), F.data == "pa:noop",        owner)
 
