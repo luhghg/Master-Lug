@@ -124,19 +124,32 @@ async def admin_menu_callback(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
+    from app.core.config import settings
     action = callback.data.split(":")[1]
-    await callback.answer()
     msg = callback.message
 
-    if action == "home":
-        await _safe_edit(msg, "🎨 <b>Адмін-панель студії</b>", reply_markup=_admin_menu_markup())
-    elif action == "add_portfolio":
-        if is_demo_bot(registered_bot_id):
+    # Demo blocks must answer BEFORE the normal answer — Telegram allows only one answer per query.
+    # Platform owner bypasses demo restrictions so they can manage demo content.
+    is_owner = (callback.from_user.id == settings.PLATFORM_OWNER_ID)
+    if is_demo_bot(registered_bot_id) and not is_owner:
+        if action == "add_portfolio":
             await callback.answer(
                 "⚠️ Це демо-режим — додавання робіт недоступне.\n\nОтримай власного бота → @masterlugbot",
                 show_alert=True,
             )
             return
+        if action == "broadcast":
+            await callback.answer(
+                "⚠️ Це демо-режим — розсилка недоступна.\n\nОтримай власного бота → @masterlugbot",
+                show_alert=True,
+            )
+            return
+
+    await callback.answer()
+
+    if action == "home":
+        await _safe_edit(msg, "🎨 <b>Адмін-панель студії</b>", reply_markup=_admin_menu_markup())
+    elif action == "add_portfolio":
         await _portfolio_add_start(msg, state)
     elif action == "portfolio":
         await _admin_portfolio_list(msg, session, registered_bot_id, callback.from_user.id)
@@ -145,12 +158,6 @@ async def admin_menu_callback(
     elif action == "reviews":
         await _admin_reviews_pending(msg, session, registered_bot_id)
     elif action == "broadcast":
-        if is_demo_bot(registered_bot_id):
-            await callback.answer(
-                "⚠️ Це демо-режим — розсилка недоступна.\n\nОтримай власного бота → @masterlugbot",
-                show_alert=True,
-            )
-            return
         await _broadcast_start(msg, state)
     elif action == "settings":
         await _settings_menu(msg, session, registered_bot_id)
