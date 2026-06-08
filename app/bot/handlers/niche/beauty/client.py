@@ -366,6 +366,12 @@ async def booking_got_contact(
 ) -> None:
     phone = message.contact.phone_number
     data = await state.get_data()
+    logger.info(
+        "booking_got_contact: bot=%s user=%s idea=%r body=%r size=%r date=%r slot=%r ref=%s",
+        registered_bot_id, message.from_user.id,
+        data.get("idea"), data.get("body_part"), data.get("size"),
+        data.get("booking_date"), data.get("time_slot"), data.get("reference_id"),
+    )
     try:
         booking = TattooBooking(
             bot_id=registered_bot_id, user_id=message.from_user.id,
@@ -375,8 +381,8 @@ async def booking_got_contact(
         )
         session.add(booking)
         await session.commit()
-    except Exception:
-        logger.exception("booking_got_contact: failed to save booking for user=%s", message.from_user.id)
+    except Exception as exc:
+        logger.exception("booking_got_contact: DB error for user=%s bot=%s — %s", message.from_user.id, registered_bot_id, exc)
         await state.clear()
         await message.answer(
             "❌ Сталася помилка при збереженні запису. Спробуйте ще раз — /start",
