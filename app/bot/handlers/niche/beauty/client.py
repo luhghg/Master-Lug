@@ -326,7 +326,8 @@ async def booking_day_selected(
 async def booking_slot_selected(
     callback: types.CallbackQuery, state: FSMContext, session: AsyncSession, registered_bot_id: int,
 ) -> None:
-    time_slot = callback.data.split(":")[1]
+    # callback.data = "tt_b_slot:HH:MM" — must take everything after prefix
+    time_slot = callback.data[len("tt_b_slot:"):]
     data = await state.get_data()
     booked = await _booked_slots(session, registered_bot_id, data["booking_date"])
     if time_slot in booked:
