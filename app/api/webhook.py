@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.bot.dispatcher import process_update
-from app.core.config import settings
+from app.core.config import niche_price, settings
 from app.core.database import AsyncSessionLocal
 from app.core.redis_client import get_redis
 from app.models.bot import RegisteredBot
@@ -29,9 +29,9 @@ def _support_line() -> str:
     return ""
 
 
-def _payment_block(bot_username: str) -> str:
+def _payment_block(bot_username: str, niche=None) -> str:
     card = settings.MONOBANK_CARD or "—"
-    price = settings.SUBSCRIPTION_PRICE
+    price = niche_price(niche) if niche is not None else settings.SUBSCRIPTION_PRICE
     return (
         f"💳 <b>Monobank:</b> <code>{card}</code>\n"
         f"💰 Сума: <b>{price} грн/міс</b>\n\n"
@@ -46,32 +46,32 @@ def _payment_block(bot_username: str) -> str:
     )
 
 
-def _warn_text(bot_username: str, days_left: int) -> str:
+def _warn_text(bot_username: str, days_left: int, niche=None) -> str:
     if days_left == 1:
         return (
             f"🚨 <b>УВАГА! Бот @{bot_username} вимкнеться ЗАВТРА!</b>\n\n"
             f"Залишився <b>1 день</b> підписки.\n"
             f"Якщо не оплатити сьогодні — бот перестане відповідати клієнтам!\n\n"
             f"⬇️ Оплатіть прямо зараз:\n\n"
-            + _payment_block(bot_username)
+            + _payment_block(bot_username, niche)
         )
     if days_left == 2:
         return (
             f"🚨 <b>УВАГА! До вимкнення бота @{bot_username} — 2 дні!</b>\n\n"
             f"Без оплати бот вимкнеться і клієнти не зможуть ним користуватись.\n\n"
             f"⬇️ Оплатіть щоб уникнути перерви в роботі:\n\n"
-            + _payment_block(bot_username)
+            + _payment_block(bot_username, niche)
         )
     if days_left == 3:
         return (
             f"⚠️ <b>Підписка на @{bot_username} закінчується через 3 дні!</b>\n\n"
             f"Не забудьте поновити — без оплати бот вимкнеться.\n\n"
-            + _payment_block(bot_username)
+            + _payment_block(bot_username, niche)
         )
     return (
         f"⚠️ <b>Підписка на @{bot_username} закінчується через {days_left} дн.</b>\n\n"
         f"Оплатіть заздалегідь щоб не переривати роботу бота.\n\n"
-        + _payment_block(bot_username)
+        + _payment_block(bot_username, niche)
     )
 
 
@@ -111,7 +111,7 @@ async def _check_subscription(registered_bot: RegisteredBot) -> bool:
             f"🔴 <b>Підписка на @{registered_bot.bot_username} закінчилась!</b>\n\n"
             f"Бот вимкнено. Клієнти не можуть ним користуватись.\n\n"
             f"Щоб відновити роботу — оплатіть підписку:\n\n"
-            + _payment_block(registered_bot.bot_username),
+            + _payment_block(registered_bot.bot_username, registered_bot.niche),
         )
         return False
 
@@ -126,7 +126,7 @@ async def _check_subscription(registered_bot: RegisteredBot) -> bool:
                 await redis.setex(warn_key, ttl, "1")
                 await _notify_owner(
                     registered_bot.owner_telegram_id,
-                    _warn_text(registered_bot.bot_username, days_left),
+                    _warn_text(registered_bot.bot_username, days_left, registered_bot.niche),
                 )
 
     return True

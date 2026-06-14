@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Path
 from pydantic import BaseModel
 
-from app.core.config import settings
+from app.core.config import niche_price, settings
 from app.core.database import AsyncSessionLocal
 from app.models.bot import RegisteredBot
 from sqlalchemy import select
@@ -57,13 +57,12 @@ async def _process_payment(item: _StatementItem) -> None:
     text = item.comment or item.description
     match = _COMMENT_RE.search(text)
     if not match:
-        logger.info("Monobank payment received but no MasterLug mention: %r", text)
-        await _notify_owner_unknown(item)
+        # Regular personal transaction — silently ignore
+        logger.debug("Monobank: ignoring transaction without MasterLug mention: %r", text)
         return
 
     username = match.group(1).lower()
     amount_uah = item.amount / _KOPECKS
-    expected = settings.SUBSCRIPTION_PRICE * _KOPECKS
 
     # Find bot first (needed for owner notification regardless of amount)
     async with AsyncSessionLocal() as session:
@@ -77,10 +76,11 @@ async def _process_payment(item: _StatementItem) -> None:
             await _notify_owner_unknown(item)
             return
 
+        expected = niche_price(bot.niche) * _KOPECKS
         if item.amount != expected:
             logger.info("Monobank wrong amount %d kopecks for @%s (expected %d)", item.amount, username, expected)
-            await _notify_client_wrong_amount(bot.owner_telegram_id, username, amount_uah)
-            await _notify_owner_wrong_amount(item, username, amount_uah, owner_id=bot.owner_telegram_id)
+            await _notify_client_wrong_amount(bot.owner_telegram_id, username, amount_uah, niche_price(bot.niche))
+            await _notify_owner_wrong_amount(item, username, amount_uah, owner_id=bot.owner_telegram_id, correct_price=niche_price(bot.niche))
             return
 
         # Extend subscription by exactly 1 month
@@ -142,7 +142,7 @@ async def _notify_platform_owner(
         logger.warning("Could not notify platform owner: %s", e)
 
 
-async def _notify_client_wrong_amount(owner_id: int, username: str, amount_uah: float) -> None:
+async def _notify_client_wrong_amount(owner_id: int, username: str, amount_uah: float, correct_price: int) -> None:
     """Notify the bot owner (client) that they sent the wrong amount."""
     support_hint = f"\n\n❓ Є питання? @{settings.SUPPORT_USERNAME}" if settings.SUPPORT_USERNAME else ""
     try:
@@ -153,9 +153,9 @@ async def _notify_client_wrong_amount(owner_id: int, username: str, amount_uah: 
             text=(
                 f"⚠️ <b>Ми отримали вашу оплату, але сума неправильна.</b>\n\n"
                 f"💵 Ви надіслали: <b>{amount_uah:.0f} грн</b>\n"
-                f"✅ Потрібно: <b>{settings.SUBSCRIPTION_PRICE} грн</b>\n\n"
+                f"✅ Потрібно: <b>{correct_price} грн</b>\n\n"
                 f"Бот <b>@{username}</b> ще не активовано.\n\n"
-                f"Будь ласка, надішліть рівно <b>{settings.SUBSCRIPTION_PRICE} грн</b> з призначенням:\n"
+                f"Будь ласка, надішліть рівно <b>{correct_price} грн</b> з призначенням:\n"
                 f"┌─────────────────────────┐\n"
                 f"  <code>MasterLug @{username}</code>\n"
                 f"└─────────────────────────┘"
@@ -166,11 +166,12 @@ async def _notify_client_wrong_amount(owner_id: int, username: str, amount_uah: 
         logger.warning("Could not notify client about wrong amount %s: %s", owner_id, e)
 
 
-async def _notify_owner_wrong_amount(item: _StatementItem, username: str, amount_uah: float, owner_id: int | None = None) -> None:
-    """Payment received but amount != 199 UAH."""
+async def _notify_owner_wrong_amount(item: _StatementItem, username: str, amount_uah: float, owner_id: int | None = None, correct_price: int | None = None) -> None:
+    """Payment received but amount doesn't match expected subscription price."""
     if not settings.PLATFORM_OWNER_ID:
         return
     client_line = f"👤 Клієнт: <a href='tg://user?id={owner_id}'>{owner_id}</a>\n" if owner_id else ""
+    expected_line = f"✅ Очікувалось: <b>{correct_price} грн</b>\n\n" if correct_price else ""
     try:
         from app.bot.master.dispatcher import get_master_bot
         bot = await get_master_bot()
@@ -181,7 +182,7 @@ async def _notify_owner_wrong_amount(item: _StatementItem, username: str, amount
                 f"🤖 @{username}\n"
                 f"{client_line}"
                 f"💵 Отримано: <b>{amount_uah:.0f} грн</b>\n"
-                f"✅ Очікувалось: <b>{settings.SUBSCRIPTION_PRICE} грн</b>\n\n"
+                f"{expected_line}"
                 f"<i>Бот НЕ активовано. Активуйте вручну через /admin якщо потрібно.</i>"
             ),
         )

@@ -42,13 +42,23 @@ class Settings(BaseSettings):
     # --- Subscription / payments ---
     MONOBANK_CARD: str = ""          # Card number shown in payment reminders
     MONOBANK_API_TOKEN: str = ""     # From Monobank app → Settings → Other → API
-    SUBSCRIPTION_PRICE: int = 199    # UAH per month
+    SUBSCRIPTION_PRICE: int = 199    # Beauty bot UAH per month
+    SUBSCRIPTION_PRICE_LABOR: int = 79  # Labor bot UAH per month
 
     # --- Demo bots (register them on the platform, then fill in) ---
     DEMO_BOT_LABOR: str = ""       # @username — shown as link on landing
     DEMO_BOT_BEAUTY: str = ""      # @username — shown as link on landing
     DEMO_BOT_LABOR_ID: int = 0     # registered_bot.id — for demo mode logic
     DEMO_BOT_BEAUTY_ID: int = 0    # registered_bot.id — for demo mode logic
+
+
+def niche_price(niche) -> int:
+    """Return subscription price in UAH for the given BotNiche."""
+    s = get_settings()
+    from app.models.bot import BotNiche
+    if niche == BotNiche.LABOR:
+        return s.SUBSCRIPTION_PRICE_LABOR
+    return s.SUBSCRIPTION_PRICE
 
 
 @lru_cache

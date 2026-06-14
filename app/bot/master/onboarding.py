@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import app_state
-from app.core.config import settings
+from app.core.config import niche_price, settings
 from app.core.security import hash_token
 from app.models.bot import BotNiche, RegisteredBot
 from app.services.bot_service import register_bot
@@ -143,7 +143,7 @@ async def land_beauty(callback: types.CallbackQuery) -> None:
         "✅ Сповіщення про нові записи миттєво\n"
         "✅ Управління розкладом і слотами\n"
         "✅ Список послуг з цінами\n\n"
-        "💰 <b>199 грн/місяць</b>\n\n"
+        f"💰 <b>{settings.SUBSCRIPTION_PRICE} грн/місяць</b>\n\n"
         f"<i>Клієнти записуються самі — ви тільки працюєте.</i>"
         f"{demo_note}",
         reply_markup=_kb(*rows),
@@ -168,7 +168,7 @@ async def land_labor(callback: types.CallbackQuery) -> None:
         "✅ Ви приймаєте або відхиляєте одним кліком\n"
         "✅ Рейтинг працівників — захист від недобросовісних\n"
         "✅ Архів вакансій та статистика\n\n"
-        "💰 <b>199 грн/місяць</b>\n\n"
+        f"💰 <b>{settings.SUBSCRIPTION_PRICE_LABOR} грн/місяць</b>\n\n"
         "<i>Публікуйте вакансії — кандидати самі приходять.</i>",
         reply_markup=_kb(*rows),
     )
@@ -190,6 +190,8 @@ async def land_pricing(callback: types.CallbackQuery) -> None:
         "📌 <b>Кожен бот — окрема підписка:</b>\n"
         "  1 бот  →  199 грн/міс\n"
         "  2 боти →  398 грн/міс\n\n"
+        f"📌 Beauty бот — <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n"
+        f"📌 Labor бот — <b>{settings.SUBSCRIPTION_PRICE_LABOR} грн/міс</b>\n\n"
         "🎁 <b>Перші 3 клієнти платформи отримують\n"
         "перший бот безкоштовно на 30 днів!</b>",
         reply_markup=_kb(
@@ -437,6 +439,7 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
 
     product = PRODUCT_NAMES.get(niche, NICHE_LABELS[niche])
 
+    price = niche_price(niche)
     if is_trial:
         await message.answer(
             f"🎉 <b>Ваш бот готовий!</b>\n\n"
@@ -444,7 +447,7 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
             f"📦 {product}\n\n"
             f"👉 Відкрийте та протестуйте: t.me/{bot_info.username}\n\n"
             f"🎁 <b>Перший місяць — безкоштовно!</b>\n"
-            f"Після 30 днів: {settings.SUBSCRIPTION_PRICE} грн/міс.\n"
+            f"Після 30 днів: {price} грн/міс.\n"
             f"Ми нагадаємо за тиждень до кінця.",
         )
     else:
@@ -455,7 +458,7 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
             f"📦 {product}\n\n"
             f"⏳ <b>Для активації необхідна оплата</b>\n\n"
             f"💳 <b>Monobank:</b> <code>{card}</code>\n"
-            f"💰 Сума: <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n\n"
+            f"💰 Сума: <b>{price} грн/міс</b>\n\n"
             f"⚠️ <b>ОБОВ'ЯЗКОВО вкажіть призначення платежу:</b>\n"
             f"┌─────────────────────────┐\n"
             f"  <code>MasterLug @{bot_info.username}</code>\n"
@@ -719,7 +722,7 @@ async def profile_bot_detail(callback: types.CallbackQuery, session: AsyncSessio
         text += (
             f"\n\n━━━━━━━━━━━━━━━━━━━━━\n"
             f"💳 <b>Monobank:</b> <code>{settings.MONOBANK_CARD}</code>\n"
-            f"💰 Сума: <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n\n"
+            f"💰 Сума: <b>{niche_price(bot.niche)} грн/міс</b>\n\n"
             f"⚠️ <b>ОБОВ'ЯЗКОВО призначення платежу:</b>\n"
             f"┌─────────────────────────┐\n"
             f"  <code>MasterLug @{bot.bot_username}</code>\n"

@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.config import niche_price, settings
 from app.models.bot import BotNiche, RegisteredBot
 from app.models.tattoo import TattooBooking, TattooReview, BookingStatus, ReviewStatus
 
@@ -296,7 +296,7 @@ async def pa_pay_request(
         return
 
     card = settings.MONOBANK_CARD or "—"
-    price = settings.SUBSCRIPTION_PRICE
+    price = niche_price(reg_bot.niche)
     username = reg_bot.bot_username
 
     text = (
@@ -470,7 +470,7 @@ async def pa_stats(callback: types.CallbackQuery, session: AsyncSession) -> None
         for row in by_niche.all()
     ) or "  —"
 
-    monthly_revenue = active_bots * settings.SUBSCRIPTION_PRICE
+    monthly_revenue = active_bots * settings.SUBSCRIPTION_PRICE  # rough estimate
 
     await callback.message.edit_text(
         f"📊 <b>MasterLug — Аналітика</b>\n\n"
