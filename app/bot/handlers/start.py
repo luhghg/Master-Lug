@@ -224,7 +224,7 @@ async def _get_user(session: AsyncSession, telegram_id: int) -> User | None:
 
 
 async def _subscribe(session: AsyncSession, bot_id: int, telegram_id: int) -> None:
-    if not bot_id:
+    if not bot_id or is_demo_bot(bot_id):
         return
     stmt = (
         pg_insert(BotSubscription)
