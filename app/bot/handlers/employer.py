@@ -247,24 +247,25 @@ async def confirm_job(
     await state.clear()
     await callback.answer()
 
-    subs_result = await session.execute(
-        select(BotSubscription.telegram_id).where(
-            BotSubscription.bot_id == registered_bot_id,
-            BotSubscription.telegram_id != callback.from_user.id,
+    if not is_demo_bot(registered_bot_id):
+        subs_result = await session.execute(
+            select(BotSubscription.telegram_id).where(
+                BotSubscription.bot_id == registered_bot_id,
+                BotSubscription.telegram_id != callback.from_user.id,
+            )
         )
-    )
-    subscriber_ids = [row[0] for row in subs_result.all()]
-    if subscriber_ids:
-        notif_text = "🔔 <b>Нова вакансія!</b>\n\nВідкрийте бот щоб переглянути та подати заявку /start"
-        sent = 0
-        for tid in subscriber_ids:
-            try:
-                await bot.send_message(chat_id=tid, text=notif_text)
-                sent += 1
-            except Exception:
-                pass
-        if sent:
-            logger.info("Notified %d subscribers about new job %s", sent, job.id)
+        subscriber_ids = [row[0] for row in subs_result.all()]
+        if subscriber_ids:
+            notif_text = "🔔 <b>Нова вакансія!</b>\n\nВідкрийте бот щоб переглянути та подати заявку /start"
+            sent = 0
+            for tid in subscriber_ids:
+                try:
+                    await bot.send_message(chat_id=tid, text=notif_text)
+                    sent += 1
+                except Exception:
+                    pass
+            if sent:
+                logger.info("Notified %d subscribers about new job %s", sent, job.id)
 
 
 async def cancel_job(callback: types.CallbackQuery, state: FSMContext) -> None:
