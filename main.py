@@ -136,6 +136,14 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         if settings.DEMO_BOT_LABOR_ID:
             await seed_labor_demo(session, settings.DEMO_BOT_LABOR_ID)
+        else:
+            # Clean up leftover demo-seeded jobs (employer_telegram_id=0 marker)
+            from sqlalchemy import delete as _delete
+            from app.models.job import Job as _Job
+            deleted = await session.execute(_delete(_Job).where(_Job.employer_telegram_id == 0))
+            if deleted.rowcount:
+                await session.commit()
+                logger.info("Cleaned up %d leftover demo jobs", deleted.rowcount)
         if settings.DEMO_BOT_BEAUTY_ID:
             # Create a temporary bot instance to upload demo portfolio photos
             demo_beauty_bot = None
