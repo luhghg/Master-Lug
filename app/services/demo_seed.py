@@ -83,13 +83,18 @@ async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
         bot.is_active = True
         await session.commit()
 
-    existing = await session.scalar(
-        select(func.count(Job.id)).where(Job.bot_id == bot_id)
+    seeded = await session.scalar(
+        select(func.count(Job.id)).where(Job.bot_id == bot_id, Job.employer_telegram_id == 0)
     )
 
-    # Re-seed if count doesn't match — clears stale demo jobs on deploy
-    if existing == _LABOR_SEED_COUNT:
-        return
+    if seeded == _LABOR_SEED_COUNT:
+        return  # already seeded correctly
+
+    # Delete stale seeded jobs (old employer_id != 0) and re-seed
+    from sqlalchemy import delete
+    await session.execute(delete(Job).where(Job.bot_id == bot_id, Job.employer_telegram_id != 0))
+    await session.commit()
+    logger.info("Cleared stale demo jobs for bot_id=%d, re-seeding", bot_id)
 
     if existing and existing > 0:
         from sqlalchemy import delete
