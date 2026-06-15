@@ -2,11 +2,12 @@
 import logging
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import Job, JobStatus, JobType
 from app.models.bot import RegisteredBot
+from app.models.tattoo import BotSubscription
 from app.services.config_service import (
     CATEGORIES, SOCIAL_TEXT, TIME_SLOTS, WELCOME_TEXT,
     get_json, set_cfg, set_json,
@@ -83,6 +84,10 @@ async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
         bot.is_active = True
         await session.commit()
 
+    # Clear all subscriptions so nobody gets spam notifications from demo
+    await session.execute(delete(BotSubscription).where(BotSubscription.bot_id == bot_id))
+    await session.commit()
+
     seeded = await session.scalar(
         select(func.count(Job.id)).where(Job.bot_id == bot_id, Job.employer_telegram_id == 0)
     )
@@ -126,6 +131,10 @@ async def seed_beauty_demo(
     if not record.is_active:
         record.is_active = True
         await session.commit()
+
+    # Clear all subscriptions so nobody gets spam notifications from demo
+    await session.execute(delete(BotSubscription).where(BotSubscription.bot_id == bot_id))
+    await session.commit()
 
     cats = await get_json(session, bot_id, CATEGORIES, None)
     if not cats:
