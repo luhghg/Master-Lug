@@ -267,15 +267,60 @@ async def cmd_start(
 
 # ── Registration from landing (niche pre-selected) ───────────────────────────
 
+_BIZ_TYPE_LABELS = {
+    "SOLO":   "👤 Сольник",
+    "STUDIO": "🏢 Студія / Компанія",
+}
+
+_LAND_BACK = {
+    "BEAUTY": "land:beauty",
+    "LABOR":  "land:labor",
+}
+
+
 async def connect_from_landing(callback: types.CallbackQuery, state: FSMContext) -> None:
     niche_value = callback.data.split(":", 1)[1]
     try:
-        niche = BotNiche(niche_value)
+        BotNiche(niche_value)
     except ValueError:
         await callback.answer("Невідома ніша", show_alert=True)
         return
 
-    await state.update_data(niche=niche_value)
+    back_cb = _LAND_BACK.get(niche_value, "land:catalog")
+    await _safe_edit(
+        callback.message,
+        "👥 <b>Для кого цей бот?</b>\n\n"
+        "Оберіть тип — від цього залежить функціонал:",
+        reply_markup=_kb(
+            [_btn("👤 Сольник  (один майстер, сам собі адмін)", cb=f"reg_type:{niche_value}:SOLO")],
+            [_btn("🏢 Студія / Компанія  (є команда, кілька майстрів)", cb=f"reg_type:{niche_value}:STUDIO")],
+            [_btn("ℹ️ Яка різниця?", cb=f"reg_biz_info:{niche_value}")],
+            [_btn("◀️ Назад", cb=back_cb)],
+        ),
+    )
+    await callback.answer()
+
+
+async def reg_biz_info(callback: types.CallbackQuery) -> None:
+    await callback.answer(
+        "👤 Сольник — один майстер, один розклад, сам керує.\n\n"
+        "🏢 Студія — кілька майстрів, адмін розподіляє клієнтів між ними.\n\n"
+        "💡 Якщо ви один — обирайте «Сольник».",
+        show_alert=True,
+    )
+
+
+async def reg_type_picked(callback: types.CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")   # reg_type:BEAUTY:SOLO
+    niche_value = parts[1]
+    biz_type = parts[2]
+    try:
+        niche = BotNiche(niche_value)
+    except ValueError:
+        await callback.answer("Помилка", show_alert=True)
+        return
+
+    await state.update_data(niche=niche_value, business_type=biz_type)
     await _show_terms(callback.message, niche, edit=True)
     await state.set_state(OnboardingFSM.terms)
     await callback.answer()
@@ -814,8 +859,10 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(land_pricing, F.data == "land:pricing")
     dp.callback_query.register(land_howto,   F.data == "land:howto")
 
-    # Connect from landing (pre-selected niche → terms)
+    # Connect from landing (pre-selected niche → solo/studio choice → terms)
     dp.callback_query.register(connect_from_landing, F.data.startswith("register:"))
+    dp.callback_query.register(reg_biz_info,         F.data.startswith("reg_biz_info:"))
+    dp.callback_query.register(reg_type_picked,      F.data.startswith("reg_type:"))
 
     # Referral info page
     dp.callback_query.register(referral_info, F.data == "referral:info")
