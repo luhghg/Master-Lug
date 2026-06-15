@@ -90,7 +90,7 @@ def _welcome_text() -> str:
 
 def _welcome_kb() -> types.InlineKeyboardMarkup:
     rows = [
-        [_btn("🤖 Обрати свій бот", cb="land:catalog")],
+        [_btn("🤖 Обрати свій бот", cb="land:biz_type")],
         [_btn("💰 Ціни та умови", cb="land:pricing"), _btn("❓ Як це працює", cb="land:howto")],
     ]
     if settings.SUPPORT_USERNAME:
@@ -103,6 +103,47 @@ async def land_home(callback: types.CallbackQuery) -> None:
     await callback.answer()
 
 
+# ── Biz type selector (before catalog) ────────────────────────────────────────
+
+async def land_biz_type(callback: types.CallbackQuery) -> None:
+    await _safe_edit(
+        callback.message,
+        "👥 <b>Для кого шукаємо бота?</b>\n\n"
+        "Оберіть тип — щоб показати найкращий варіант саме для вас:",
+        reply_markup=_kb(
+            [_btn("👤 Для себе  (я один майстер / підприємець)", cb="biz_type:SOLO")],
+            [_btn("🏢 Для студії / компанії  (є команда або кілька майстрів)", cb="biz_type:STUDIO")],
+            [_btn("ℹ️ Яка різниця?", cb="biz_type_info")],
+            [_btn("◀️ Назад", cb="land:home")],
+        ),
+    )
+    await callback.answer()
+
+
+async def biz_type_info(callback: types.CallbackQuery) -> None:
+    await callback.answer(
+        "👤 Сольник — ви один, самі ведете клієнтів і керуєте ботом.\n\n"
+        "🏢 Студія — у вас команда: кілька майстрів, адміністратор керує всіма.\n\n"
+        "💡 Якщо ви один — обирайте «Для себе».",
+        show_alert=True,
+    )
+
+
+async def biz_type_picked(callback: types.CallbackQuery, state: FSMContext) -> None:
+    biz_type = callback.data.split(":", 1)[1]   # SOLO or STUDIO
+    await state.update_data(business_type=biz_type)
+    await _safe_edit(
+        callback.message,
+        "🛒 <b>Каталог ботів</b>\n\nОберіть тип бота для вашого бізнесу:",
+        reply_markup=_kb(
+            [_btn("🎨 Бот для майстра краси", cb="land:beauty")],
+            [_btn("👷 Бот для роботодавця",   cb="land:labor")],
+            [_btn("◀️ Назад",                 cb="land:biz_type")],
+        ),
+    )
+    await callback.answer()
+
+
 # ── Catalog ───────────────────────────────────────────────────────────────────
 
 async def land_catalog(callback: types.CallbackQuery) -> None:
@@ -112,7 +153,7 @@ async def land_catalog(callback: types.CallbackQuery) -> None:
         reply_markup=_kb(
             [_btn("🎨 Бот для майстра краси", cb="land:beauty")],
             [_btn("👷 Бот для роботодавця",   cb="land:labor")],
-            [_btn("◀️ Назад",                 cb="land:home")],
+            [_btn("◀️ Назад",                 cb="land:biz_type")],
         ),
     )
     await callback.answer()
@@ -281,23 +322,14 @@ _LAND_BACK = {
 async def connect_from_landing(callback: types.CallbackQuery, state: FSMContext) -> None:
     niche_value = callback.data.split(":", 1)[1]
     try:
-        BotNiche(niche_value)
+        niche = BotNiche(niche_value)
     except ValueError:
         await callback.answer("Невідома ніша", show_alert=True)
         return
 
-    back_cb = _LAND_BACK.get(niche_value, "land:catalog")
-    await _safe_edit(
-        callback.message,
-        "👥 <b>Для кого цей бот?</b>\n\n"
-        "Оберіть тип — від цього залежить функціонал:",
-        reply_markup=_kb(
-            [_btn("👤 Сольник  (один майстер, сам собі адмін)", cb=f"reg_type:{niche_value}:SOLO")],
-            [_btn("🏢 Студія / Компанія  (є команда, кілька майстрів)", cb=f"reg_type:{niche_value}:STUDIO")],
-            [_btn("ℹ️ Яка різниця?", cb=f"reg_biz_info:{niche_value}")],
-            [_btn("◀️ Назад", cb=back_cb)],
-        ),
-    )
+    await state.update_data(niche=niche_value)
+    await _show_terms(callback.message, niche, edit=True)
+    await state.set_state(OnboardingFSM.terms)
     await callback.answer()
 
 
@@ -852,14 +884,19 @@ def register(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, Command("back"))
 
     # Landing navigation
-    dp.callback_query.register(land_home,    F.data == "land:home")
-    dp.callback_query.register(land_catalog, F.data == "land:catalog")
-    dp.callback_query.register(land_beauty,  F.data == "land:beauty")
-    dp.callback_query.register(land_labor,   F.data == "land:labor")
-    dp.callback_query.register(land_pricing, F.data == "land:pricing")
-    dp.callback_query.register(land_howto,   F.data == "land:howto")
+    dp.callback_query.register(land_home,     F.data == "land:home")
+    dp.callback_query.register(land_biz_type, F.data == "land:biz_type")
+    dp.callback_query.register(land_catalog,  F.data == "land:catalog")
+    dp.callback_query.register(land_beauty,   F.data == "land:beauty")
+    dp.callback_query.register(land_labor,    F.data == "land:labor")
+    dp.callback_query.register(land_pricing,  F.data == "land:pricing")
+    dp.callback_query.register(land_howto,    F.data == "land:howto")
 
-    # Connect from landing (pre-selected niche → solo/studio choice → terms)
+    # Biz type selection (solo vs studio)
+    dp.callback_query.register(biz_type_info,   F.data == "biz_type_info")
+    dp.callback_query.register(biz_type_picked, F.data.startswith("biz_type:"))
+
+    # Connect from landing (pre-selected niche → terms)
     dp.callback_query.register(connect_from_landing, F.data.startswith("register:"))
     dp.callback_query.register(reg_biz_info,         F.data.startswith("reg_biz_info:"))
     dp.callback_query.register(reg_type_picked,      F.data.startswith("reg_type:"))
