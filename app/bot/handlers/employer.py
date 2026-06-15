@@ -99,13 +99,6 @@ def _employer_keyboard() -> types.InlineKeyboardMarkup:
 async def start_create_job(
     callback: types.CallbackQuery, state: FSMContext, registered_bot_id: int = 0,
 ) -> None:
-    if is_demo_bot(registered_bot_id):
-        await callback.answer(
-            "⚠️ Це демо-режим — створення вакансій недоступне.\n\n"
-            "Отримай власного бота → @masterlugbot",
-            show_alert=True,
-        )
-        return
     await _safe_edit(callback.message, "📍 В якому місті потрібен працівник?")
     await state.set_state(CreateJobFSM.city)
     await callback.answer()
@@ -294,12 +287,10 @@ async def my_jobs(
     registered_bot_id: int,
     bot_username: str,
 ) -> None:
-    result = await session.execute(
-        select(Job)
-        .where(Job.bot_id == registered_bot_id, Job.status == JobStatus.OPEN)
-        .order_by(Job.created_at.desc())
-        .limit(10)
-    )
+    q = select(Job).where(Job.bot_id == registered_bot_id, Job.status == JobStatus.OPEN)
+    if is_demo_bot(registered_bot_id):
+        q = q.where(Job.employer_telegram_id == callback.from_user.id)
+    result = await session.execute(q.order_by(Job.created_at.desc()).limit(10))
     jobs = list(result.scalars().all())
 
     if not jobs:
@@ -356,15 +347,13 @@ async def archive(
     registered_bot_id: int,
     bot_username: str,
 ) -> None:
-    result = await session.execute(
-        select(Job)
-        .where(
-            Job.bot_id == registered_bot_id,
-            Job.status.in_([JobStatus.CANCELLED, JobStatus.COMPLETED, JobStatus.ASSIGNED]),
-        )
-        .order_by(Job.created_at.desc())
-        .limit(15)
+    q = select(Job).where(
+        Job.bot_id == registered_bot_id,
+        Job.status.in_([JobStatus.CANCELLED, JobStatus.COMPLETED, JobStatus.ASSIGNED]),
     )
+    if is_demo_bot(registered_bot_id):
+        q = q.where(Job.employer_telegram_id == callback.from_user.id)
+    result = await session.execute(q.order_by(Job.created_at.desc()).limit(15))
     jobs = list(result.scalars().all())
 
     if not jobs:

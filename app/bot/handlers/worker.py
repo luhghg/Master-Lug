@@ -88,7 +88,26 @@ async def show_all_jobs(
         )
         return
 
-    jobs = await list_bot_jobs(session, registered_bot_id)
+    if is_demo_bot(registered_bot_id):
+        from app.core.config import settings
+        from sqlalchemy import or_
+        from app.models.job import JobStatus as _JS
+        res = await session.execute(
+            select(Job)
+            .where(
+                Job.bot_id == registered_bot_id,
+                Job.status == _JS.OPEN,
+                or_(
+                    Job.employer_telegram_id == settings.PLATFORM_OWNER_ID,
+                    Job.employer_telegram_id == callback.from_user.id,
+                ),
+            )
+            .order_by(Job.created_at.desc())
+            .limit(20)
+        )
+        jobs = list(res.scalars().all())
+    else:
+        jobs = await list_bot_jobs(session, registered_bot_id)
 
     if not jobs:
         await _safe_edit(
@@ -195,13 +214,6 @@ async def show_contacts(
 async def apply_for_job(
     callback: types.CallbackQuery, session: AsyncSession, bot: Bot, registered_bot_id: int,
 ) -> None:
-    if is_demo_bot(registered_bot_id):
-        await callback.answer(
-            "⚠️ Це демо-режим — відгуки на вакансії недоступні.\n\n"
-            "Отримай власного бота → @masterlugbot",
-            show_alert=True,
-        )
-        return
     job_id_str = callback.data.split(":", 1)[1]
     try:
         job_id = uuid.UUID(job_id_str)
