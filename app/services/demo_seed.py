@@ -35,39 +35,30 @@ logger = logging.getLogger(__name__)
 _LABOR_JOBS = [
     dict(
         job_type=JobType.ONETIME,
-        city="Вінниця",
-        description="Потрібні вантажники для розвантаження фури. Робота на 1 день, фізична підготовка вітається.",
-        pay_description="800 грн/день + обід",
-        workers_needed=3,
-        location="вул. Хмельницьке шосе 12, склад №3",
-        scheduled_time=datetime(2027, 3, 15, 8, 0),
+        city="Київ",
+        description=(
+            "Потрібні вантажники для розвантаження меблів та техніки при переїзді офісу. "
+            "Робота фізична, але без спеціальних навичок. Обід за рахунок роботодавця. "
+            "Оплата готівкою в кінці дня."
+        ),
+        pay_description="1 200 грн/день + обід",
+        workers_needed=4,
+        location="вул. Хрещатик 22, офіс 3 поверх — зібратись о 8:45 біля входу",
+        scheduled_time=datetime(2026, 8, 10, 9, 0),
     ),
     dict(
         job_type=JobType.PERMANENT,
-        city="Вінниця",
-        description="Прибиральник у торговий центр. Графік 2/2, ранкова зміна 06:00–14:00. Офіційне оформлення.",
-        pay_description="12 000 грн/міс",
+        city="Київ",
+        description=(
+            "Шукаємо комірника на склад інтернет-магазину. "
+            "Обов'язки: приймання товару, сортування, видача кур'єрам. "
+            "Графік Пн–Пт 09:00–18:00, є обідня перерва. "
+            "Офіційне оформлення, своєчасна виплата зарплати."
+        ),
+        pay_description="18 000 грн/міс + премії",
         workers_needed=1,
-        location="ТРЦ 'Проспект', вул. Соборна 12",
-        scheduled_time=datetime(2027, 3, 20, 0, 0),
-    ),
-    dict(
-        job_type=JobType.ONETIME,
-        city="Вінниця",
-        description="Промоутери для роздачі листівок та анкетування біля ТЦ. Досвід не потрібен, навчаємо на місці.",
-        pay_description="600 грн за 6 годин",
-        workers_needed=5,
-        location="ТЦ 'Мегамол', центральний вхід",
-        scheduled_time=datetime(2027, 4, 1, 10, 0),
-    ),
-    dict(
-        job_type=JobType.ONETIME,
-        city="Вінниця",
-        description="Різноробочий на будівельний об'єкт. Подача матеріалів, прибирання території.",
-        pay_description="700 грн/день",
-        workers_needed=2,
-        location="вул. Келецька 55, новобудова",
-        scheduled_time=datetime(2027, 4, 5, 7, 30),
+        location="вул. Бориспільська 9, склад LogiHub (є маршрутка від ст. м. Харківська)",
+        scheduled_time=datetime(2026, 8, 1, 0, 0),
     ),
 ]
 
@@ -78,6 +69,9 @@ _BEAUTY_CATEGORIES = [
     {"key": "blackwork",  "name": "⬛ Blackwork"},
     {"key": "japanese",   "name": "🐉 Японський стиль"},
 ]
+
+
+_LABOR_SEED_COUNT = len(_LABOR_JOBS)
 
 
 async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
@@ -92,8 +86,16 @@ async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
     existing = await session.scalar(
         select(func.count(Job.id)).where(Job.bot_id == bot_id)
     )
-    if existing and existing > 0:
+
+    # Re-seed if count doesn't match — clears stale demo jobs on deploy
+    if existing == _LABOR_SEED_COUNT:
         return
+
+    if existing and existing > 0:
+        from sqlalchemy import delete
+        await session.execute(delete(Job).where(Job.bot_id == bot_id))
+        await session.commit()
+        logger.info("Cleared %d stale demo jobs for bot_id=%d", existing, bot_id)
 
     for data in _LABOR_JOBS:
         session.add(Job(
@@ -103,7 +105,7 @@ async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
             **data,
         ))
     await session.commit()
-    logger.info("Seeded %d demo jobs for bot_id=%d", len(_LABOR_JOBS), bot_id)
+    logger.info("Seeded %d demo jobs for bot_id=%d", _LABOR_SEED_COUNT, bot_id)
 
 
 async def seed_beauty_demo(
