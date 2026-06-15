@@ -76,8 +76,10 @@ _LABOR_SEED_COUNT = len(_LABOR_JOBS)
 
 
 async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
+    logger.info("seed_labor_demo called for bot_id=%d", bot_id)
     bot = await session.get(RegisteredBot, bot_id)
     if not bot:
+        logger.warning("seed_labor_demo: bot_id=%d not found in DB", bot_id)
         return
 
     if not bot.is_active:
