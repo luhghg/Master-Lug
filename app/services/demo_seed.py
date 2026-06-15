@@ -100,7 +100,7 @@ async def seed_labor_demo(session: AsyncSession, bot_id: int) -> None:
     for data in _LABOR_JOBS:
         session.add(Job(
             bot_id=bot_id,
-            employer_telegram_id=bot.owner_telegram_id,
+            employer_telegram_id=0,  # 0 = demo seed marker, visible to all
             status=JobStatus.OPEN,
             **data,
         ))

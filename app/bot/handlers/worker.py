@@ -89,7 +89,6 @@ async def show_all_jobs(
         return
 
     if is_demo_bot(registered_bot_id):
-        from app.core.config import settings
         from sqlalchemy import or_
         from app.models.job import JobStatus as _JS
         res = await session.execute(
@@ -98,7 +97,7 @@ async def show_all_jobs(
                 Job.bot_id == registered_bot_id,
                 Job.status == _JS.OPEN,
                 or_(
-                    Job.employer_telegram_id == settings.PLATFORM_OWNER_ID,
+                    Job.employer_telegram_id == 0,  # seeded demo jobs
                     Job.employer_telegram_id == callback.from_user.id,
                 ),
             )
