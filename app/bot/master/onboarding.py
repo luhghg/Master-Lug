@@ -22,17 +22,20 @@ logger = logging.getLogger(__name__)
 NICHE_LABELS: dict[BotNiche, str] = {
     BotNiche.LABOR:  "💼 Робота та підробіток",
     BotNiche.BEAUTY: "💅 Краса та тату",
+    BotNiche.TATTOO: "🖤 Тату-майстер",
     BotNiche.SPORTS: "🏋️ Спорт та фітнес",
 }
 
 PRODUCT_NAMES: dict[BotNiche, str] = {
     BotNiche.BEAUTY: "🎨 Бот для майстра краси",
+    BotNiche.TATTOO: "🖤 Бот для тату-майстра",
     BotNiche.LABOR:  "👷 Бот для роботодавця",
 }
 
 NICHE_NAME_EXAMPLES: dict[BotNiche, str] = {
     BotNiche.LABOR:  "vinnytsia_robota_vasyl_bot",
-    BotNiche.BEAUTY: "kyiv_tatu_olga_bot",
+    BotNiche.BEAUTY: "kyiv_beauty_master_bot",
+    BotNiche.TATTOO: "kyiv_tatu_olga_bot",
     BotNiche.SPORTS: "lviv_sport_andriy_bot",
 }
 
@@ -151,6 +154,7 @@ async def land_catalog(callback: types.CallbackQuery) -> None:
         callback.message,
         "🛒 <b>Каталог ботів</b>\n\nОберіть тип бота для вашого бізнесу:",
         reply_markup=_kb(
+            [_btn("🖤 Бот для тату-майстра",  cb="land:tattoo")],
             [_btn("🎨 Бот для майстра краси", cb="land:beauty")],
             [_btn("👷 Бот для роботодавця",   cb="land:labor")],
             [_btn("◀️ Назад",                 cb="land:biz_type")],
@@ -160,6 +164,29 @@ async def land_catalog(callback: types.CallbackQuery) -> None:
 
 
 # ── Product pages ─────────────────────────────────────────────────────────────
+
+async def land_tattoo(callback: types.CallbackQuery) -> None:
+    rows = []
+    rows.append([_btn("🚀 Підключити цей бот", cb="register:TATTOO")])
+    rows.append([_btn("◀️ До каталогу", cb="land:catalog")])
+    await _safe_edit(
+        callback.message,
+        "🖤 <b>Бот для тату-майстра</b>\n\n"
+        "Повноцінна система запису для тату-майстрів — з депозитом, портфоліо та CRM-клієнтів.\n\n"
+        "<b>Що вміє бот:</b>\n"
+        "✅ Анкета запису: стиль, зона, розмір, референс-фото\n"
+        "✅ Алергія та перекриття — питає автоматично\n"
+        "✅ Вибір дати і часу з вашого розкладу\n"
+        "✅ Депозит: клієнт надсилає скріншот, ви підтверджуєте\n"
+        "✅ Портфоліо за стилями з фото\n"
+        "✅ CRM-клієнтів: рейтинг, no-show, нотатки\n"
+        "✅ Управління розкладом і вихідними\n\n"
+        f"💰 <b>{settings.SUBSCRIPTION_PRICE} грн/місяць</b>\n\n"
+        "<i>Клієнти записуються самостійно 24/7 — ви тільки підтверджуєте оплату.</i>",
+        reply_markup=_kb(*rows),
+    )
+    await callback.answer()
+
 
 async def land_beauty(callback: types.CallbackQuery) -> None:
     rows = []
@@ -316,6 +343,7 @@ _BIZ_TYPE_LABELS = {
 _LAND_BACK = {
     "BEAUTY": "land:beauty",
     "LABOR":  "land:labor",
+    "TATTOO": "land:tattoo",
 }
 
 
@@ -887,6 +915,7 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(land_home,     F.data == "land:home")
     dp.callback_query.register(land_biz_type, F.data == "land:biz_type")
     dp.callback_query.register(land_catalog,  F.data == "land:catalog")
+    dp.callback_query.register(land_tattoo,   F.data == "land:tattoo")
     dp.callback_query.register(land_beauty,   F.data == "land:beauty")
     dp.callback_query.register(land_labor,    F.data == "land:labor")
     dp.callback_query.register(land_pricing,  F.data == "land:pricing")

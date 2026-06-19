@@ -9,8 +9,9 @@ from app.models.base import Base
 
 class BotNiche(str, enum.Enum):
     """Plug-in niches — add a new value to expand the platform."""
-    LABOR = "LABOR"
+    LABOR  = "LABOR"
     BEAUTY = "BEAUTY"
+    TATTOO = "TATTOO"
     SPORTS = "SPORTS"
 
 

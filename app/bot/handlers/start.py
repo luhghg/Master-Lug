@@ -116,6 +116,8 @@ async def _route(
 ) -> None:
     from app.bot.handlers.niche.beauty.client import show_client_menu
     from app.bot.handlers.niche.beauty.admin import show_admin_menu
+    from app.bot.handlers.niche.tattoo.client import show_client_menu as ttt_show_client
+    from app.bot.handlers.niche.tattoo.master import show_admin_menu as ttt_show_admin
     from app.bot.handlers.worker import show_worker_home
 
     # Demo mode — show role selector instead of routing
@@ -132,6 +134,13 @@ async def _route(
         return
 
     user_id = message.chat.id
+
+    if bot_niche == "TATTOO":
+        if user_id == owner_telegram_id:
+            await ttt_show_admin(message)
+        else:
+            await ttt_show_client(message, session, registered_bot_id)
+        return
 
     if bot_niche == "BEAUTY":
         if user_id == owner_telegram_id:
@@ -258,8 +267,11 @@ async def demo_pick_client(
     bot_niche: str = "LABOR",
 ) -> None:
     from app.bot.handlers.niche.beauty.client import show_client_menu
+    from app.bot.handlers.niche.tattoo.client import show_client_menu as ttt_client
     from app.bot.handlers.worker import show_worker_home
-    if bot_niche == "BEAUTY":
+    if bot_niche == "TATTOO":
+        await ttt_client(callback.message, session, registered_bot_id)
+    elif bot_niche == "BEAUTY":
         await show_client_menu(callback.message, session, registered_bot_id)
     else:
         await show_worker_home(callback.message, session, registered_bot_id)
@@ -271,7 +283,10 @@ async def demo_pick_admin(
     bot_niche: str = "LABOR",
 ) -> None:
     from app.bot.handlers.niche.beauty.admin import show_admin_menu
-    if bot_niche == "BEAUTY":
+    from app.bot.handlers.niche.tattoo.master import show_admin_menu as ttt_admin
+    if bot_niche == "TATTOO":
+        await ttt_admin(callback.message)
+    elif bot_niche == "BEAUTY":
         await show_admin_menu(callback.message)
     else:
         await _show_employer_panel(callback.message)

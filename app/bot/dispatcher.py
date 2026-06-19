@@ -18,6 +18,8 @@ from aiogram.types import Update
 from app.bot.handlers import employer, start, worker
 from app.bot.handlers.niche.beauty import admin as beauty_admin
 from app.bot.handlers.niche.beauty import client as beauty_client
+from app.bot.handlers.niche.tattoo import client as tattoo_client
+from app.bot.handlers.niche.tattoo import master as tattoo_master
 from app.bot.middlewares.block_check import BlockCheckMiddleware
 from app.bot.middlewares.db_session import DBSessionMiddleware
 from app.bot.middlewares.rate_limit import RateLimitMiddleware
@@ -57,6 +59,8 @@ async def _get_dispatcher() -> Dispatcher:
     worker.register(dp)
     beauty_client.register(dp)
     beauty_admin.register(dp)
+    tattoo_client.register(dp)
+    tattoo_master.register(dp)
 
     _dispatcher = dp
     logger.info("Shared Dispatcher initialized.")

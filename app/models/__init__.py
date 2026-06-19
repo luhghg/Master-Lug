@@ -1,5 +1,8 @@
 # Import all models here so Alembic autogenerate picks them up via Base.metadata
 from app.models.application import Application
+from app.models.appointment import (
+    ApptBlockedDate, ApptBooking, ApptClient, ApptDeposit, ApptReminder, ApptSchedule,
+)
 from app.models.blocked_user import BotBlockedUser
 from app.models.bot import RegisteredBot
 from app.models.bot_config import BotConfig
@@ -12,4 +15,6 @@ __all__ = [
     "User", "RegisteredBot", "Job", "Application", "BotBlockedUser",
     "BotConfig", "PlatformWhitelist",
     "TattooPortfolio", "TattooReview", "TattooBooking", "BotSubscription",
+    "ApptClient", "ApptBooking", "ApptDeposit", "ApptSchedule",
+    "ApptBlockedDate", "ApptReminder",
 ]
