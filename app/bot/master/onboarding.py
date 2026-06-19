@@ -91,18 +91,24 @@ def _welcome_text() -> str:
     )
 
 
-def _welcome_kb() -> types.InlineKeyboardMarkup:
+def _welcome_kb(has_bots: bool = False) -> types.InlineKeyboardMarkup:
     rows = [
         [_btn("🤖 Обрати свій бот", cb="land:biz_type")],
         [_btn("💰 Ціни та умови", cb="land:pricing"), _btn("❓ Як це працює", cb="land:howto")],
     ]
+    if has_bots:
+        rows.append([_btn("👤 Мій профіль", cb="profile:home")])
     if settings.SUPPORT_USERNAME:
         rows.append([_btn("💬 Підтримка", url=f"https://t.me/{settings.SUPPORT_USERNAME}")])
     return _kb(*rows)
 
 
-async def land_home(callback: types.CallbackQuery) -> None:
-    await _safe_edit(callback.message, _welcome_text(), reply_markup=_welcome_kb())
+async def land_home(callback: types.CallbackQuery, session: AsyncSession) -> None:
+    existing = await session.execute(
+        select(RegisteredBot).where(RegisteredBot.owner_telegram_id == callback.from_user.id)
+    )
+    has_bots = bool(existing.scalars().all())
+    await _safe_edit(callback.message, _welcome_text(), reply_markup=_welcome_kb(has_bots=has_bots))
     await callback.answer()
 
 
@@ -320,17 +326,12 @@ async def cmd_start(
         redis = await get_redis()
         await redis.incr(f"ref_clicks:{referrer_id}")
 
-    # Returning user with bots → profile/dashboard
+    # Always show welcome landing — but add "Мій профіль" button for existing users
     existing = await session.execute(
         select(RegisteredBot).where(RegisteredBot.owner_telegram_id == message.from_user.id)
     )
     bots = list(existing.scalars().all())
-    if bots:
-        await _show_my_bots(message, bots, message.from_user.id)
-        return
-
-    # New user → welcome landing
-    await message.answer(_welcome_text(), reply_markup=_welcome_kb())
+    await message.answer(_welcome_text(), reply_markup=_welcome_kb(has_bots=bool(bots)))
 
 
 # ── Registration from landing (niche pre-selected) ───────────────────────────
