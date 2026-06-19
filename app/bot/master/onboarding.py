@@ -622,6 +622,16 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
                     f"@{message.from_user.username or '—'} / {message.from_user.full_name}\n"
                     f"💳 {'🎁 Безкоштовний тріал 30 дн.' if is_trial else '⏳ Очікує оплати'}"
                 ),
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(
+                        text="✅ Активувати на 30 днів",
+                        callback_data=f"pa:sub_extend:{registered.id}:30",
+                    )],
+                    [types.InlineKeyboardButton(
+                        text="🔍 Деталі бота",
+                        callback_data=f"pa:bot:{registered.id}",
+                    )],
+                ]),
             )
         except Exception:
             pass
