@@ -17,6 +17,10 @@ redis[asyncio]==5.2.0
 # Config & security
 pydantic-settings==2.6.1
 cryptography==43.0.3
+python-dotenv==1.0.1
+
+# Demo bots (SQLite storage for polling-mode demos)
+aiosqlite==0.20.0
 
 # Monitoring
 sentry-sdk[fastapi]==2.19.2
