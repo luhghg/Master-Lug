@@ -48,8 +48,10 @@ class Settings(BaseSettings):
     # --- Demo bots (register them on the platform, then fill in) ---
     DEMO_BOT_LABOR: str = ""       # @username — shown as link on landing
     DEMO_BOT_BEAUTY: str = ""      # @username — shown as link on landing
+    DEMO_BOT_TATTOO: str = ""      # @username — shown as link on landing
     DEMO_BOT_LABOR_ID: int = 0     # registered_bot.id — for demo mode logic
     DEMO_BOT_BEAUTY_ID: int = 0    # registered_bot.id — for demo mode logic
+    DEMO_BOT_TATTOO_ID: int = 0    # registered_bot.id — for demo mode logic
 
 
 def niche_price(niche) -> int:

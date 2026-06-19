@@ -145,6 +145,7 @@ async def biz_type_picked(callback: types.CallbackQuery, state: FSMContext) -> N
         callback.message,
         "🛒 <b>Каталог ботів</b>\n\nОберіть тип бота для вашого бізнесу:",
         reply_markup=_kb(
+            [_btn("🖤 Бот для тату-майстра",  cb="land:tattoo")],
             [_btn("🎨 Бот для майстра краси", cb="land:beauty")],
             [_btn("👷 Бот для роботодавця",   cb="land:labor")],
             [_btn("◀️ Назад",                 cb="land:biz_type")],
@@ -173,6 +174,8 @@ async def land_catalog(callback: types.CallbackQuery) -> None:
 
 async def land_tattoo(callback: types.CallbackQuery) -> None:
     rows = []
+    if settings.DEMO_BOT_TATTOO:
+        rows.append([_btn("🤖 Спробувати демо-бот", url=f"https://t.me/{settings.DEMO_BOT_TATTOO}")])
     rows.append([_btn("🚀 Підключити цей бот", cb="register:TATTOO")])
     rows.append([_btn("◀️ До каталогу", cb="land:catalog")])
     await _safe_edit(
