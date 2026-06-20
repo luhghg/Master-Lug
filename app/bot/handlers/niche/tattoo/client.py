@@ -21,11 +21,12 @@ from app.services.config_service import get_cfg, is_demo_bot
 logger = logging.getLogger(__name__)
 
 # ── Config keys ───────────────────────────────────────────────────────────────
-_DEPOSIT_AMOUNT  = "ttt_deposit_amount"
-_CARD_NUMBER     = "ttt_card_number"
-_WELCOME_TEXT    = "ttt_welcome"
-_SOCIAL_TEXT     = "ttt_social"
-_DEPOSIT_MINUTES = "ttt_deposit_minutes"  # minutes client has to pay before slot released
+_DEPOSIT_AMOUNT   = "ttt_deposit_amount"
+_DEPOSIT_ENABLED  = "ttt_deposit_enabled"
+_CARD_NUMBER      = "ttt_card_number"
+_WELCOME_TEXT     = "ttt_welcome"
+_SOCIAL_TEXT      = "ttt_social"
+_DEPOSIT_MINUTES  = "ttt_deposit_minutes"  # minutes client has to pay before slot released
 
 _DEFAULT_DEPOSIT   = 500
 _DEFAULT_CARD      = ""
@@ -122,6 +123,11 @@ async def _get_deposit(session: AsyncSession, bot_id: int) -> int:
         return int(raw)
     except (ValueError, TypeError):
         return _DEFAULT_DEPOSIT
+
+
+async def _get_deposit_enabled(session: AsyncSession, bot_id: int) -> bool:
+    raw = await get_cfg(session, bot_id, _DEPOSIT_ENABLED, "true")
+    return raw.lower() != "false"
 
 
 async def _get_card(session: AsyncSession, bot_id: int) -> str:
@@ -866,20 +872,22 @@ async def time_picked(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
-    slot_time = callback.data.split(":")[1]
+    slot_time = callback.data.split(":", 1)[1]
     await state.update_data(slot_time=slot_time)
     data = await state.get_data()
     deposit = await _get_deposit(session, registered_bot_id)
+    enabled = await _get_deposit_enabled(session, registered_bot_id)
     await callback.answer()
-    await _show_summary(callback.message, data, deposit)
+    await _show_summary(callback.message, data, deposit if enabled else None)
 
 
-async def _show_summary(message: types.Message, data: dict, deposit: int) -> None:
+async def _show_summary(message: types.Message, data: dict, deposit: int | None) -> None:
     d = date.fromisoformat(data["slot_date"])
     day_ua = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"][d.weekday()]
     ref = "📎 Є фото" if data.get("reference_file_id") else "—"
     allergy = data.get("allergy_text") or "Немає"
     overlap = data.get("overlap_text") or "Немає"
+    dep_line = f"💳 Депозит: <b>{deposit} грн</b>\n\n" if deposit is not None else ""
 
     text = (
         "📋 <b>Перевірте ваш запис:</b>\n\n"
@@ -891,8 +899,8 @@ async def _show_summary(message: types.Message, data: dict, deposit: int) -> Non
         f"♻️ Перекриття: {overlap}\n\n"
         f"📅 Дата:  <b>{day_ua}, {d.strftime('%d.%m.%Y')}</b>\n"
         f"🕐 Час:   <b>{data.get('slot_time')}</b>\n\n"
-        f"💳 Депозит: <b>{deposit} грн</b>\n\n"
-        "Все вірно?"
+        + dep_line
+        + "Все вірно?"
     )
     await _safe_edit(
         message,
@@ -918,7 +926,45 @@ async def booking_confirm(
 
     client = await _upsert_client(session, registered_bot_id, user)
     d = date.fromisoformat(data["slot_date"])
+    day_ua = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"][d.weekday()]
+    deposit_enabled = await _get_deposit_enabled(session, registered_bot_id)
 
+    if not deposit_enabled:
+        # Auto-confirm: no deposit required
+        booking = ApptBooking(
+            bot_id=registered_bot_id,
+            client_id=client.id,
+            style=data.get("style"),
+            body_zone=data.get("body_zone"),
+            body_size=data.get("body_size"),
+            reference_text=data.get("reference_text"),
+            reference_file_id=data.get("reference_file_id"),
+            allergy_text=data.get("allergy_text"),
+            overlap_text=data.get("overlap_text"),
+            slot_date=d,
+            slot_time=data["slot_time"],
+            status=ApptBookingStatus.CONFIRMED,
+        )
+        session.add(booking)
+        await session.flush()
+        client.bookings_count = (client.bookings_count or 0) + 1
+        await session.commit()
+        await state.clear()
+        await callback.answer()
+        await _safe_edit(
+            callback.message,
+            f"✅ <b>Ваш запис підтверджено!</b>\n\n"
+            f"📅 {day_ua}, {d.strftime('%d.%m.%Y')} о {data['slot_time']}\n\n"
+            f"Чекаємо вас! 🙏",
+            reply_markup=_home_kb(),
+        )
+        await _notify_master_new_booking(
+            bot, owner_telegram_id, booking, client, user, 0, registered_bot_id,
+            deposit_enabled=False,
+        )
+        return
+
+    # Deposit required — standard flow
     booking = ApptBooking(
         bot_id=registered_bot_id,
         client_id=client.id,
@@ -951,7 +997,6 @@ async def booking_confirm(
 
     card = await _get_card(session, registered_bot_id)
     card_line = f"💳 Картка: <code>{card}</code>\n" if card else ""
-    day_ua = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"][d.weekday()]
 
     await _safe_edit(
         callback.message,
@@ -969,7 +1014,9 @@ async def booking_confirm(
     await state.set_state(TattooClientFSM.screenshot)
 
     # Notify master
-    await _notify_master_new_booking(bot, owner_telegram_id, booking, client, user, deposit_amount, registered_bot_id)
+    await _notify_master_new_booking(
+        bot, owner_telegram_id, booking, client, user, deposit_amount, registered_bot_id,
+    )
 
 
 async def _notify_master_new_booking(
@@ -980,6 +1027,7 @@ async def _notify_master_new_booking(
     user: types.User,
     deposit: int,
     bot_id: int,
+    deposit_enabled: bool = True,
 ) -> None:
     demo = is_demo_bot(bot_id)
     notify_id = user.id if demo else owner_id
@@ -989,7 +1037,23 @@ async def _notify_master_new_booking(
     day_ua = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"][booking.slot_date.weekday()]
     allergy = booking.allergy_text or "Немає"
     overlap = booking.overlap_text or "Немає"
-    ref_line = "📎 Є фото-референс" if booking.reference_file_id else ""
+
+    if deposit_enabled:
+        dep_line = f"💳 Депозит: {deposit} грн — <b>очікуємо скріншот</b>"
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="❌ Відхилити запис",
+                callback_data=f"tttm_bk:{booking.id}:reject",
+            )],
+        ])
+    else:
+        dep_line = "💳 Без депозиту — ✅ <b>підтверджено автоматично</b>"
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="📋 Переглянути запис",
+                callback_data=f"tttm_bk:{booking.id}:view",
+            )],
+        ])
 
     text = (
         f"{prefix}"
@@ -1001,15 +1065,9 @@ async def _notify_master_new_booking(
         + f"💊 Алергія: {allergy}\n"
         f"♻️ Перекриття: {overlap}\n\n"
         f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n"
-        f"💳 Депозит: {deposit} грн — <b>очікуємо скріншот</b>\n\n"
+        f"{dep_line}\n\n"
         f"ID запису: #{booking.id}"
     )
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(
-            text="❌ Відхилити запис",
-            callback_data=f"tttm_bk:{booking.id}:reject",
-        )],
-    ])
     try:
         await bot.send_message(chat_id=notify_id, text=text, reply_markup=kb)
     except Exception as e:

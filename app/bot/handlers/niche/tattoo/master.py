@@ -1,5 +1,6 @@
 """Master/admin handlers for the TATTOO niche — booking management, schedule, clients."""
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, types
@@ -14,8 +15,23 @@ from app.models.appointment import (
     ApptClient, ApptDeposit, ApptDepositStatus, ApptSchedule,
 )
 from app.models.tattoo import TattooPortfolio, TattooReview, ReviewStatus, TattooService
+from app.services.config_service import get_cfg
 
 logger = logging.getLogger(__name__)
+
+_SOCIAL_TEXT    = "ttt_social"
+_DEFAULT_SOCIAL = "📱 Сторінки майстра поки не налаштовані."
+_IG_RE          = re.compile(r"@([\w.]+)")
+
+
+def _contact_line(social: str) -> str:
+    """Return a contact phrase if an Instagram handle is present; empty string otherwise."""
+    if not social or social == _DEFAULT_SOCIAL:
+        return ""
+    m = _IG_RE.search(social)
+    if m:
+        return f"Якщо щось зміниться — напишіть нам в Instagram: @{m.group(1)} заздалегідь."
+    return ""
 
 _DAYS_UA = ["Понеділок", "Вівторок", "Середа", "Четвер", "П'ятниця", "Субота", "Неділя"]
 _DAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
@@ -284,15 +300,16 @@ async def booking_action(
 
         if client_tid:
             day_ua = _DAYS_SHORT[booking.slot_date.weekday()]
+            social = await get_cfg(session, registered_bot_id, _SOCIAL_TEXT, _DEFAULT_SOCIAL)
+            contact = _contact_line(social)
+            confirm_text = (
+                f"✅ <b>Ваш запис підтверджено!</b>\n\n"
+                f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
+                f"Чекаємо вас!"
+                + (f"\n\n{contact}" if contact else "")
+            )
             try:
-                await bot.send_message(
-                    chat_id=client_tid,
-                    text=(
-                        f"✅ <b>Ваш запис підтверджено!</b>\n\n"
-                        f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
-                        f"Чекаємо вас! Якщо щось зміниться — напишіть заздалегідь."
-                    ),
-                )
+                await bot.send_message(chat_id=client_tid, text=confirm_text)
             except Exception as e:
                 logger.warning("Could not notify client about confirmation: %s", e)
 
