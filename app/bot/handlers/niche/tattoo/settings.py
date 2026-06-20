@@ -28,23 +28,25 @@ logger = logging.getLogger(__name__)
 # ── FSM ────────────────────────────────────────────────────────────────────────
 
 class TattooSettingsFSM(StatesGroup):
-    s_name        = State()
-    s_bio         = State()
-    s_city        = State()
-    s_sched_days  = State()
-    s_sched_start = State()
-    s_sched_end   = State()
-    s_sched_duration = State()
-    s_sched_buffer   = State()
-    s_svc_name    = State()
-    s_svc_price   = State()
-    s_svc_desc    = State()
-    s_dep_amount  = State()
-    s_dep_card    = State()
-    s_dep_purpose = State()
-    s_msg_edit    = State()
-    s_age_text    = State()
-    s_cancel_hours = State()
+    s_name           = State()
+    s_bio            = State()
+    s_city           = State()
+    s_sched_days     = State()
+    s_sched_start    = State()   # text: HH:MM
+    s_sched_end      = State()   # text: HH:MM
+    s_sched_duration = State()   # buttons or custom
+    s_sched_dur_custom = State() # text: minutes
+    s_sched_buffer   = State()   # buttons or custom
+    s_sched_buf_custom = State() # text: minutes
+    s_svc_name       = State()
+    s_svc_price      = State()
+    s_svc_desc       = State()
+    s_dep_amount     = State()
+    s_dep_card       = State()
+    s_dep_purpose    = State()
+    s_msg_edit       = State()
+    s_age_text       = State()
+    s_cancel_hours   = State()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -253,19 +255,30 @@ async def settings_sched_day_toggle(callback: types.CallbackQuery, state: FSMCon
     await callback.answer()
 
 
-def _s_time_kb(start_h: int, end_h: int, step_min: int, cb_prefix: str) -> types.InlineKeyboardMarkup:
-    times = []
-    cur = start_h * 60
-    while cur <= end_h * 60:
-        times.append(f"{cur // 60:02d}:{cur % 60:02d}")
-        cur += step_min
-    rows = []
-    for i in range(0, len(times), 3):
-        rows.append([
-            types.InlineKeyboardButton(text=t, callback_data=f"{cb_prefix}:{t}")
-            for t in times[i:i+3]
-        ])
-    rows.append([_back_to_settings_btn()])
+def _s_nav_kb() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[[_back_to_settings_btn()]])
+
+
+def _s_dur_kb() -> types.InlineKeyboardMarkup:
+    quick = [("30 хв", 30), ("1 год", 60), ("1.5 год", 90),
+             ("2 год", 120), ("4 год", 240), ("8 год", 480)]
+    rows = [
+        [types.InlineKeyboardButton(text=lbl, callback_data=f"ttts_sched_dur:{m}") for lbl, m in quick[:3]],
+        [types.InlineKeyboardButton(text=lbl, callback_data=f"ttts_sched_dur:{m}") for lbl, m in quick[3:]],
+        [types.InlineKeyboardButton(text="✏️ Вказати своє (хвилини)", callback_data="ttts_sched_dur_custom")],
+        [_back_to_settings_btn()],
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _s_buf_kb() -> types.InlineKeyboardMarkup:
+    quick = [("0 хв", 0), ("15 хв", 15), ("30 хв", 30), ("45 хв", 45), ("60 хв", 60)]
+    rows = [
+        [types.InlineKeyboardButton(text=lbl, callback_data=f"ttts_sched_buf:{m}") for lbl, m in quick[:3]],
+        [types.InlineKeyboardButton(text=lbl, callback_data=f"ttts_sched_buf:{m}") for lbl, m in quick[2:]],
+        [types.InlineKeyboardButton(text="✏️ Вказати своє (хвилини)", callback_data="ttts_sched_buf_custom")],
+        [_back_to_settings_btn()],
+    ]
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -278,38 +291,52 @@ async def settings_sched_days_done(callback: types.CallbackQuery, state: FSMCont
     await callback.answer()
     await _safe_edit(
         callback.message,
-        "🗓 <b>Розклад</b>\n\nОберіть час початку роботи:",
-        reply_markup=_s_time_kb(7, 20, 30, "ttts_sched_start"),
+        "🗓 <b>Розклад</b>\n\nВведіть час <b>початку</b> роботи у форматі ГГ:ХХ\n(наприклад: <code>09:00</code>):",
+        reply_markup=_s_nav_kb(),
     )
 
 
-async def settings_sched_start(callback: types.CallbackQuery, state: FSMContext) -> None:
-    t = callback.data.split(":")[1] + ":" + callback.data.split(":")[2]
+async def settings_sched_start_input(message: types.Message, state: FSMContext) -> None:
+    from app.bot.handlers.niche.tattoo.wizard import _parse_time
+    t = _parse_time(message.text or "")
+    if t is None:
+        await message.answer(
+            "❌ Невірний формат. Введіть час у форматі ГГ:ХХ, наприклад: <code>09:00</code>",
+            reply_markup=_s_nav_kb(),
+        )
+        return
     await state.update_data(s_sched_start=t)
     await state.set_state(TattooSettingsFSM.s_sched_end)
-    await callback.answer()
-    await _safe_edit(
-        callback.message,
-        "🗓 <b>Розклад</b>\n\nОберіть час закінчення роботи:",
-        reply_markup=_s_time_kb(8, 22, 30, "ttts_sched_end"),
+    await message.answer(
+        f"🗓 <b>Розклад</b>\n\n✅ Початок: <b>{t}</b>\n\nВведіть час <b>закінчення</b> роботи (наприклад: <code>18:00</code>):",
+        reply_markup=_s_nav_kb(),
     )
 
 
-async def settings_sched_end(callback: types.CallbackQuery, state: FSMContext) -> None:
-    t = callback.data.split(":")[1] + ":" + callback.data.split(":")[2]
+async def settings_sched_end_input(message: types.Message, state: FSMContext) -> None:
+    from app.bot.handlers.niche.tattoo.wizard import _parse_time
+    t = _parse_time(message.text or "")
+    if t is None:
+        await message.answer(
+            "❌ Невірний формат. Введіть час у форматі ГГ:ХХ, наприклад: <code>18:00</code>",
+            reply_markup=_s_nav_kb(),
+        )
+        return
+    data = await state.get_data()
+    start = data.get("s_sched_start", "00:00")
+    sh, sm = map(int, start.split(":"))
+    eh, em = map(int, t.split(":"))
+    if eh * 60 + em <= sh * 60 + sm:
+        await message.answer(
+            f"❌ Час закінчення (<b>{t}</b>) має бути <b>пізнішим</b> за час початку (<b>{start}</b>).\n\nВведіть знову:",
+            reply_markup=_s_nav_kb(),
+        )
+        return
     await state.update_data(s_sched_end=t)
     await state.set_state(TattooSettingsFSM.s_sched_duration)
-    opts = [("30 хв", 30), ("45 хв", 45), ("60 хв", 60), ("90 хв", 90), ("120 хв", 120), ("180 хв", 180)]
-    rows = [
-        [types.InlineKeyboardButton(text=lbl, callback_data=f"ttts_sched_dur:{m}") for lbl, m in opts[:3]],
-        [types.InlineKeyboardButton(text=lbl, callback_data=f"ttts_sched_dur:{m}") for lbl, m in opts[3:]],
-        [_back_to_settings_btn()],
-    ]
-    await callback.answer()
-    await _safe_edit(
-        callback.message,
-        "🗓 <b>Розклад</b>\n\nТривалість сеансу:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    await message.answer(
+        f"🗓 <b>Розклад</b>\n\n✅ {start} – {t}\n\nТривалість сеансу:",
+        reply_markup=_s_dur_kb(),
     )
 
 
@@ -317,34 +344,56 @@ async def settings_sched_duration(callback: types.CallbackQuery, state: FSMConte
     mins = int(callback.data.split(":")[1])
     await state.update_data(s_sched_duration=mins)
     await state.set_state(TattooSettingsFSM.s_sched_buffer)
-    opts = [("0 хв", 0), ("15 хв", 15), ("30 хв", 30), ("45 хв", 45), ("60 хв", 60)]
-    row = [types.InlineKeyboardButton(text=lbl, callback_data=f"ttts_sched_buf:{m}") for lbl, m in opts]
     await callback.answer()
     await _safe_edit(
         callback.message,
-        "🗓 <b>Розклад</b>\n\nПауза між сеансами:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[row[:3], row[3:], [_back_to_settings_btn()]]),
+        f"🗓 <b>Розклад</b>\n\n✅ Тривалість: <b>{mins} хв</b>\n\nПауза між сеансами:",
+        reply_markup=_s_buf_kb(),
     )
 
 
-async def settings_sched_buffer(
-    callback: types.CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    registered_bot_id: int,
-) -> None:
-    buf = int(callback.data.split(":")[1])
-    data = await state.get_data()
-    days = data.get("s_sched_days", [])
-    start = data.get("s_sched_start", "10:00")
-    end   = data.get("s_sched_end", "20:00")
-    dur   = data.get("s_sched_duration", 60)
+async def settings_sched_dur_custom_btn(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TattooSettingsFSM.s_sched_dur_custom)
+    await callback.answer()
+    await _safe_edit(
+        callback.message,
+        "🗓 <b>Розклад</b>\n\nВведіть тривалість сеансу в хвилинах (15–720):",
+        reply_markup=_s_nav_kb(),
+    )
 
+
+async def settings_sched_dur_custom_input(message: types.Message, state: FSMContext) -> None:
+    from app.bot.handlers.niche.tattoo.wizard import _parse_minutes
+    mins = _parse_minutes(message.text or "", min_val=15, max_val=720)
+    if mins is None:
+        await message.answer(
+            "❌ Введіть ціле число від 15 до 720 хвилин (наприклад: <code>90</code>):",
+            reply_markup=_s_nav_kb(),
+        )
+        return
+    await state.update_data(s_sched_duration=mins)
+    await state.set_state(TattooSettingsFSM.s_sched_buffer)
+    await message.answer(
+        f"🗓 <b>Розклад</b>\n\n✅ Тривалість: <b>{mins} хв</b>\n\nПауза між сеансами:",
+        reply_markup=_s_buf_kb(),
+    )
+
+
+async def _do_save_settings_schedule(
+    state: FSMContext, session: AsyncSession, bot_id: int, buf: int
+) -> bool:
+    data = await state.get_data()
+    days  = data.get("s_sched_days", [])
+    if not days:
+        return False
+    start = data.get("s_sched_start", "10:00")
+    end   = data.get("s_sched_end",   "20:00")
+    dur   = data.get("s_sched_duration", 60)
     for dow in days:
         stmt = (
             pg_insert(ApptSchedule)
             .values(
-                bot_id=registered_bot_id,
+                bot_id=bot_id,
                 day_of_week=dow,
                 start_time=start,
                 end_time=end,
@@ -365,10 +414,59 @@ async def settings_sched_buffer(
         )
         await session.execute(stmt)
     await session.commit()
+    return True
+
+
+async def settings_sched_buffer(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    buf = int(callback.data.split(":")[1])
+    saved = await _do_save_settings_schedule(state, session, registered_bot_id, buf)
+    if not saved:
+        await callback.answer("⚠️ Список днів втрачено — оберіть дні знову.", show_alert=True)
+        return
     await state.clear()
     await callback.answer("✅ Розклад збережено!")
     await _safe_edit(
         callback.message,
+        "✅ Розклад оновлено.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="◀️ Розклад", callback_data="ttts_schedule")],
+        ]),
+    )
+
+
+async def settings_sched_buf_custom_btn(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TattooSettingsFSM.s_sched_buf_custom)
+    await callback.answer()
+    await _safe_edit(
+        callback.message,
+        "🗓 <b>Розклад</b>\n\nВведіть паузу між сеансами в хвилинах (0–120):",
+        reply_markup=_s_nav_kb(),
+    )
+
+
+async def settings_sched_buf_custom_input(
+    message: types.Message, state: FSMContext,
+    session: AsyncSession, registered_bot_id: int,
+) -> None:
+    from app.bot.handlers.niche.tattoo.wizard import _parse_minutes
+    buf = _parse_minutes(message.text or "", min_val=0, max_val=120)
+    if buf is None:
+        await message.answer(
+            "❌ Введіть ціле число від 0 до 120 хвилин (наприклад: <code>0</code> або <code>30</code>):",
+            reply_markup=_s_nav_kb(),
+        )
+        return
+    saved = await _do_save_settings_schedule(state, session, registered_bot_id, buf)
+    if not saved:
+        await message.answer("⚠️ Список днів втрачено — починайте налаштування розкладу знову.")
+        return
+    await state.clear()
+    await message.answer(
         "✅ Розклад оновлено.",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="◀️ Розклад", callback_data="ttts_schedule")],
@@ -1104,10 +1202,17 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(settings_sched_edit,       F.data == "ttts_sched_edit")
     dp.callback_query.register(settings_sched_day_toggle, F.data.startswith("ttts_sched_day_tog:"))
     dp.callback_query.register(settings_sched_days_done,  F.data == "ttts_sched_days_done")
-    dp.callback_query.register(settings_sched_start,      F.data.startswith("ttts_sched_start:"))
-    dp.callback_query.register(settings_sched_end,        F.data.startswith("ttts_sched_end:"))
-    dp.callback_query.register(settings_sched_duration,   F.data.startswith("ttts_sched_dur:"))
-    dp.callback_query.register(settings_sched_buffer,     F.data.startswith("ttts_sched_buf:"))
+    # start/end: text input
+    dp.message.register(settings_sched_start_input,      TattooSettingsFSM.s_sched_start,      F.text)
+    dp.message.register(settings_sched_end_input,        TattooSettingsFSM.s_sched_end,        F.text)
+    # duration: buttons + custom
+    dp.callback_query.register(settings_sched_duration,      F.data.startswith("ttts_sched_dur:"))
+    dp.callback_query.register(settings_sched_dur_custom_btn, F.data == "ttts_sched_dur_custom")
+    dp.message.register(settings_sched_dur_custom_input, TattooSettingsFSM.s_sched_dur_custom, F.text)
+    # buffer: buttons + custom
+    dp.callback_query.register(settings_sched_buffer,        F.data.startswith("ttts_sched_buf:"))
+    dp.callback_query.register(settings_sched_buf_custom_btn, F.data == "ttts_sched_buf_custom")
+    dp.message.register(settings_sched_buf_custom_input, TattooSettingsFSM.s_sched_buf_custom, F.text)
 
     # Services
     dp.callback_query.register(settings_services,      F.data == "ttts_services")
