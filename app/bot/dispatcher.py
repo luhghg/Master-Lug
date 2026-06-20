@@ -20,6 +20,8 @@ from app.bot.handlers.niche.beauty import admin as beauty_admin
 from app.bot.handlers.niche.beauty import client as beauty_client
 from app.bot.handlers.niche.tattoo import client as tattoo_client
 from app.bot.handlers.niche.tattoo import master as tattoo_master
+from app.bot.handlers.niche.tattoo import wizard as tattoo_wizard
+from app.bot.handlers.niche.tattoo import settings as tattoo_settings
 from app.bot.middlewares.block_check import BlockCheckMiddleware
 from app.bot.middlewares.db_session import DBSessionMiddleware
 from app.bot.middlewares.rate_limit import RateLimitMiddleware
@@ -61,6 +63,8 @@ async def _get_dispatcher() -> Dispatcher:
     beauty_admin.register(dp)
     tattoo_client.register(dp)
     tattoo_master.register(dp)
+    tattoo_wizard.register(dp)
+    tattoo_settings.register(dp)
 
     _dispatcher = dp
     logger.info("Shared Dispatcher initialized.")

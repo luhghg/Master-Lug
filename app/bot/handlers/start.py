@@ -31,6 +31,7 @@ TERMS_TEXT = (
 async def cmd_start(
     message: types.Message,
     command: CommandObject,
+    state: FSMContext,
     session: AsyncSession,
     owner_telegram_id: int,
     bot_niche: str = "LABOR",
@@ -63,11 +64,12 @@ async def cmd_start(
         return
 
     await _subscribe(session, registered_bot_id, message.from_user.id)
-    await _route(message, command.args, session, owner_telegram_id, bot_niche, registered_bot_id)
+    await _route(message, command.args, state, session, owner_telegram_id, bot_niche, registered_bot_id)
 
 
 async def consent_agree(
     callback: types.CallbackQuery,
+    state: FSMContext,
     session: AsyncSession,
     owner_telegram_id: int,
     bot_niche: str = "LABOR",
@@ -93,7 +95,7 @@ async def consent_agree(
     await _subscribe(session, registered_bot_id, callback.from_user.id)
     await callback.message.delete()
     await callback.answer()
-    await _route(callback.message, arg or None, session, owner_telegram_id, bot_niche, registered_bot_id)
+    await _route(callback.message, arg or None, state, session, owner_telegram_id, bot_niche, registered_bot_id)
 
 
 async def consent_decline(callback: types.CallbackQuery) -> None:
@@ -109,6 +111,7 @@ async def consent_decline(callback: types.CallbackQuery) -> None:
 async def _route(
     message: types.Message,
     args: str | None,
+    state: FSMContext,
     session: AsyncSession,
     owner_telegram_id: int,
     bot_niche: str = "LABOR",
@@ -136,9 +139,21 @@ async def _route(
     user_id = message.chat.id
 
     if bot_niche == "TATTOO":
+        from app.services.config_service import get_cfg
+        from app.bot.handlers.niche.tattoo.wizard import TTT_ONBOARDING_DONE, start_wizard
         if user_id == owner_telegram_id:
-            await ttt_show_admin(message)
+            done = await get_cfg(session, registered_bot_id, TTT_ONBOARDING_DONE, "false")
+            if done != "true":
+                await start_wizard(message, state, session, registered_bot_id)
+            else:
+                await ttt_show_admin(message)
         else:
+            done = await get_cfg(session, registered_bot_id, TTT_ONBOARDING_DONE, "false")
+            if done != "true":
+                await message.answer(
+                    "⏳ Майстер ще налаштовує бота. Спробуйте зайти трохи пізніше!"
+                )
+                return
             await ttt_show_client(message, session, registered_bot_id)
         return
 
@@ -257,7 +272,7 @@ async def cmd_menu(
     if user is None or user.terms_agreed_at is None:
         await message.answer("Спочатку потрібно погодитись з умовами. Натисніть /start")
         return
-    await _route(message, None, session, owner_telegram_id, bot_niche, registered_bot_id)
+    await _route(message, None, state, session, owner_telegram_id, bot_niche, registered_bot_id)
 
 
 async def demo_pick_client(

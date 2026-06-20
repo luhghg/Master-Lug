@@ -53,7 +53,7 @@ def _admin_markup() -> types.InlineKeyboardMarkup:
         ],
         [
             types.InlineKeyboardButton(text="🎨 Портфоліо", callback_data="tttm_portfolio"),
-            types.InlineKeyboardButton(text="💳 Налаштування", callback_data="tttm_settings"),
+            types.InlineKeyboardButton(text="⚙️ Налаштування", callback_data="tttm_settings"),
         ],
     ])
 
@@ -874,95 +874,9 @@ async def blocked_delete(
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
-async def settings_view(
-    callback: types.CallbackQuery,
-    session: AsyncSession,
-    registered_bot_id: int,
-) -> None:
-    from app.services.config_service import get_cfg
-    from app.bot.handlers.niche.tattoo.client import _DEPOSIT_AMOUNT, _CARD_NUMBER, _DEFAULT_DEPOSIT
-
-    deposit = await get_cfg(session, registered_bot_id, _DEPOSIT_AMOUNT, str(_DEFAULT_DEPOSIT))
-    card    = await get_cfg(session, registered_bot_id, _CARD_NUMBER, "—")
-
-    await callback.message.edit_text(
-        f"💳 <b>Налаштування оплати:</b>\n\n"
-        f"💰 Депозит: <b>{deposit} грн</b>\n"
-        f"💳 Картка: <code>{card or '—'}</code>\n\n"
-        "Для зміни оберіть пункт:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="✏️ Змінити суму депозиту", callback_data="tttm_set:deposit_amount")],
-            [types.InlineKeyboardButton(text="✏️ Змінити номер картки",  callback_data="tttm_set:card")],
-            [types.InlineKeyboardButton(text="✏️ Текст привітання",      callback_data="tttm_set:welcome")],
-            [types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")],
-        ]),
-    )
-    await callback.answer()
-
-
-async def settings_edit(
-    callback: types.CallbackQuery,
-    state: FSMContext,
-) -> None:
-    key = callback.data.split(":")[1]
-    prompts = {
-        "deposit_amount": ("Введіть нову суму депозиту (тільки число, грн):", TattooMasterFSM.deposit_amount),
-        "card":           ("Введіть номер картки (або IBAN) для отримання депозиту:", TattooMasterFSM.deposit_card),
-        "welcome":        ("Введіть новий текст привітання (HTML дозволено):", TattooMasterFSM.welcome_text),
-    }
-    if key not in prompts:
-        await callback.answer()
-        return
-    text, fsm_state = prompts[key]
-    await state.update_data(settings_key=key)
-    await callback.message.edit_text(
-        text,
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="◀️ Скасувати", callback_data="tttm_settings")],
-        ]),
-    )
-    await state.set_state(fsm_state)
-    await callback.answer()
-
-
-async def settings_save(
-    message: types.Message,
-    state: FSMContext,
-    session: AsyncSession,
-    registered_bot_id: int,
-) -> None:
-    from app.services.config_service import set_cfg
-    from app.bot.handlers.niche.tattoo.client import (
-        _DEPOSIT_AMOUNT, _CARD_NUMBER, _WELCOME_TEXT,
-    )
-    data = await state.get_data()
-    key = data.get("settings_key", "")
-    value = message.text.strip()
-
-    cfg_key_map = {
-        "deposit_amount": _DEPOSIT_AMOUNT,
-        "card":           _CARD_NUMBER,
-        "welcome":        _WELCOME_TEXT,
-    }
-    if key not in cfg_key_map:
-        await state.clear()
-        return
-
-    if key == "deposit_amount":
-        try:
-            int(value)
-        except ValueError:
-            await message.answer("Введіть тільки число (наприклад: 500):")
-            return
-
-    await set_cfg(session, registered_bot_id, cfg_key_map[key], value)
-    await state.clear()
-    await message.answer(
-        "✅ Збережено.",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="◀️ Налаштування", callback_data="tttm_settings")],
-        ]),
-    )
+async def settings_view(callback: types.CallbackQuery) -> None:
+    from app.bot.handlers.niche.tattoo.settings import show_settings_menu
+    await show_settings_menu(callback)
 
 
 # ── Portfolio (admin side) ─────────────────────────────────────────────────────
@@ -1142,10 +1056,6 @@ def register(dp: Dispatcher) -> None:
 
     # Settings
     dp.callback_query.register(settings_view, F.data == "tttm_settings")
-    dp.callback_query.register(settings_edit, F.data.startswith("tttm_set:"))
-    dp.message.register(settings_save, TattooMasterFSM.deposit_amount, F.text)
-    dp.message.register(settings_save, TattooMasterFSM.deposit_card,   F.text)
-    dp.message.register(settings_save, TattooMasterFSM.welcome_text,   F.text)
 
     # Portfolio admin
     dp.callback_query.register(admin_portfolio,    F.data == "tttm_portfolio")
