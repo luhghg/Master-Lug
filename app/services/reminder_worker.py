@@ -163,4 +163,4 @@ async def reminder_worker_loop() -> None:
             await _run_once()
         except Exception:
             logger.exception("Reminder worker top-level error — continuing")
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)  # TEMP: 10s for manual testing; restore to 60
