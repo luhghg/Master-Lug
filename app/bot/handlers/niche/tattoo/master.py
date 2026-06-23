@@ -15,7 +15,8 @@ from app.models.appointment import (
     ApptClient, ApptDeposit, ApptDepositStatus, ApptSchedule,
 )
 from app.models.tattoo import TattooPortfolio, TattooReview, ReviewStatus, TattooService
-from app.services.config_service import get_cfg
+from app.services.config_service import get_cfg, get_json
+from app.bot.handlers.niche.tattoo.wizard import TTT_STYLES
 
 logger = logging.getLogger(__name__)
 
@@ -916,8 +917,8 @@ async def admin_portfolio(
     count = len(works)
     rows = [
         [types.InlineKeyboardButton(
-            text=f"🎨 {w.style} | {w.price} | 👁{w.view_count}",
-            callback_data=f"tttm_portfolio_del:{w.id}",
+            text=f"🎨 {w.style} | {w.price} | 👁 {w.view_count}",
+            callback_data=f"tttm_portfolio_view:{w.id}",
         )]
         for w in works
     ]
@@ -925,10 +926,44 @@ async def admin_portfolio(
     rows.append([types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")])
     await callback.message.edit_text(
         f"🎨 <b>Портфоліо</b> ({count} робіт):\n\n"
-        "Натисніть на роботу щоб <b>видалити</b>:",
+        "Натисніть на роботу щоб <b>переглянути</b>:",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
+
+
+async def portfolio_view(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+    bot: Bot,
+) -> None:
+    work_id = int(callback.data.split(":")[1])
+    work = await session.get(TattooPortfolio, work_id)
+    if not work or work.bot_id != registered_bot_id:
+        await callback.answer("Не знайдено.", show_alert=True)
+        return
+    await callback.answer()
+    caption = (
+        f"🎨 <b>{work.style}</b>\n\n"
+        f"{work.description}\n\n"
+        f"⏱ Час виконання: {work.work_time}\n"
+        f"💰 Ціна: {work.price}\n"
+        f"👁 Переглядів клієнтами: {work.view_count}"
+    )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🗑 Видалити цю роботу", callback_data=f"tttm_portfolio_del:{work_id}")],
+        [types.InlineKeyboardButton(text="◀️ До портфоліо", callback_data="tttm_portfolio")],
+    ])
+    try:
+        await bot.send_photo(
+            chat_id=callback.from_user.id,
+            photo=work.photo_id,
+            caption=caption,
+            reply_markup=kb,
+        )
+    except Exception:
+        await callback.message.answer(caption, reply_markup=kb)
 
 
 async def portfolio_add_start(
@@ -945,13 +980,47 @@ async def portfolio_add_start(
     await callback.answer()
 
 
-async def portfolio_add_photo(message: types.Message, state: FSMContext) -> None:
+async def portfolio_add_photo(
+    message: types.Message,
+    state: FSMContext,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
     if not message.photo:
         await message.answer("Надішліть фото:")
         return
     await state.update_data(portfolio_photo_id=message.photo[-1].file_id)
-    await message.answer("Введіть <b>стиль</b> (наприклад: Реалізм, Blackwork):")
     await state.set_state(TattooMasterFSM.portfolio_style)
+
+    styles: list = await get_json(session, registered_bot_id, TTT_STYLES, [])
+    if styles:
+        rows = [
+            [types.InlineKeyboardButton(text=s, callback_data=f"tttm_pf_style:{s}")]
+            for s in styles
+        ]
+        rows.append([types.InlineKeyboardButton(text="◀️ Скасувати", callback_data="tttm_portfolio")])
+        await message.answer(
+            "Оберіть <b>стиль</b> цієї роботи:",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+    else:
+        await message.answer(
+            "Введіть <b>стиль</b> (наприклад: Реалізм, Blackwork):\n\n"
+            "<i>💡 Додайте стилі в ⚙️ Налаштування → 🖼 Стилі — і наступного разу вони з'являться кнопками.</i>",
+        )
+
+
+async def portfolio_pick_style(callback: types.CallbackQuery, state: FSMContext) -> None:
+    style = callback.data[len("tttm_pf_style:"):]
+    await state.update_data(portfolio_style=style)
+    await state.set_state(TattooMasterFSM.portfolio_desc)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"✅ Стиль: <b>{style}</b>\n\nОпис роботи (коротко, 1–2 речення):",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="◀️ Скасувати", callback_data="tttm_portfolio")],
+        ]),
+    )
 
 
 async def portfolio_add_style(message: types.Message, state: FSMContext) -> None:
@@ -1215,7 +1284,9 @@ def register(dp: Dispatcher) -> None:
     # Portfolio admin
     dp.callback_query.register(admin_portfolio,    F.data == "tttm_portfolio")
     dp.callback_query.register(portfolio_add_start, F.data == "tttm_portfolio_add")
+    dp.callback_query.register(portfolio_view,     F.data.startswith("tttm_portfolio_view:"))
     dp.callback_query.register(portfolio_delete,   F.data.startswith("tttm_portfolio_del:"))
+    dp.callback_query.register(portfolio_pick_style, TattooMasterFSM.portfolio_style, F.data.startswith("tttm_pf_style:"))
     dp.message.register(portfolio_add_photo, TattooMasterFSM.portfolio_photo, F.photo)
     dp.message.register(portfolio_add_style, TattooMasterFSM.portfolio_style, F.text)
     dp.message.register(portfolio_add_desc,  TattooMasterFSM.portfolio_desc,  F.text)
