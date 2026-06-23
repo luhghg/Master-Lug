@@ -2,6 +2,7 @@
 import calendar
 import logging
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -9,14 +10,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment import (
     ApptBlockedDate, ApptBooking, ApptBookingStatus,
-    ApptClient, ApptDeposit, ApptDepositStatus, ApptSchedule,
+    ApptClient, ApptDeposit, ApptDepositStatus, ApptReminder, ApptSchedule,
+    ReminderStatus, ReminderType,
 )
 from app.models.tattoo import TattooPortfolio, TattooReview, ReviewStatus, TattooService
 from app.services.config_service import get_cfg, is_demo_bot
+
+_TZ = ZoneInfo("Europe/Kyiv")
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +180,7 @@ async def _available_dates(
     if not schedules:
         # No schedule configured — return next 30 weekdays as fallback
         result = set()
-        d = date.today() + timedelta(days=1)
+        d = datetime.now(_TZ).date() + timedelta(days=1)
         while len(result) < 30:
             if d.weekday() < 5:  # Mon-Fri
                 result.add(d)
@@ -207,7 +212,7 @@ async def _available_dates(
     )).all()
     booked = {(r.slot_date, r.slot_time) for r in booked_rows}
 
-    today = date.today()
+    today = datetime.now(_TZ).date()
     available: set[date] = set()
 
     for offset in range(1, lookahead_days + 1):
@@ -274,8 +279,8 @@ async def _slots_for_date(
     )).scalars().all()
     booked_times = set(booked_rows)
 
-    now = datetime.now(timezone.utc)
-    today = date.today()
+    now = datetime.now(_TZ)
+    today = now.date()
 
     result = []
     for slot in all_slots:
@@ -283,7 +288,7 @@ async def _slots_for_date(
             continue
         if d == today:
             h, m = map(int, slot.split(":"))
-            slot_dt = datetime(d.year, d.month, d.day, h, m, tzinfo=timezone.utc)
+            slot_dt = datetime(d.year, d.month, d.day, h, m, tzinfo=_TZ)
             if slot_dt <= now + timedelta(hours=1):
                 continue
         result.append(slot)
@@ -295,7 +300,7 @@ async def _slots_for_date(
 def _make_ttt_calendar(
     year: int, month: int, available: set[date]
 ) -> types.InlineKeyboardMarkup:
-    today = date.today()
+    today = datetime.now(_TZ).date()
     prev_m = month - 1 if month > 1 else 12
     prev_y = year if month > 1 else year - 1
     next_m = month + 1 if month < 12 else 1
@@ -802,7 +807,7 @@ async def _ask_date(
     bot_id: int,
 ) -> None:
     available = await _available_dates(session, bot_id)
-    today = date.today()
+    today = datetime.now(_TZ).date()
     year, month = today.year, today.month
     cal = _make_ttt_calendar(year, month, available)
     await state.update_data(
@@ -913,6 +918,38 @@ async def _show_summary(message: types.Message, data: dict, deposit: int | None)
     )
 
 
+def _build_reminders(booking: ApptBooking) -> list[ApptReminder]:
+    """Create ApptReminder rows for a newly confirmed booking."""
+    slot_dt = datetime(
+        booking.slot_date.year, booking.slot_date.month, booking.slot_date.day,
+        *map(int, booking.slot_time.split(":")),
+        tzinfo=_TZ,
+    )
+    now = datetime.now(_TZ)
+    reminders = []
+    for rtype, delta in [
+        (ReminderType.HOURS_168, timedelta(days=7)),
+        (ReminderType.HOURS_24,  timedelta(hours=24)),
+        (ReminderType.HOURS_2,   timedelta(hours=2)),
+    ]:
+        scheduled = slot_dt - delta
+        if scheduled > now:
+            reminders.append(ApptReminder(
+                booking_id=booking.id,
+                reminder_type=rtype,
+                status=ReminderStatus.PENDING,
+                scheduled_at=scheduled.astimezone(timezone.utc),
+            ))
+    # Review reminder: 3 hours after session end
+    reminders.append(ApptReminder(
+        booking_id=booking.id,
+        reminder_type=ReminderType.REVIEW,
+        status=ReminderStatus.PENDING,
+        scheduled_at=(slot_dt + timedelta(hours=3)).astimezone(timezone.utc),
+    ))
+    return reminders
+
+
 async def booking_confirm(
     callback: types.CallbackQuery,
     state: FSMContext,
@@ -946,8 +983,24 @@ async def booking_confirm(
             status=ApptBookingStatus.CONFIRMED,
         )
         session.add(booking)
-        await session.flush()
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            await callback.answer()
+            await _safe_edit(
+                callback.message,
+                "⚡ <b>Цей час щойно зайняв інший клієнт.</b>\n\n"
+                "Оберіть інший слот — ваша анкета збережена 👇",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🗓 Обрати інший час", callback_data="ttt_book:back_time")],
+                    [types.InlineKeyboardButton(text="❌ Скасувати", callback_data="ttt_book:cancel")],
+                ]),
+            )
+            return
         client.bookings_count = (client.bookings_count or 0) + 1
+        for rem in _build_reminders(booking):
+            session.add(rem)
         await session.commit()
         await state.clear()
         await callback.answer()
@@ -980,7 +1033,21 @@ async def booking_confirm(
         status=ApptBookingStatus.AWAITING_DEPOSIT,
     )
     session.add(booking)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        await callback.answer()
+        await _safe_edit(
+            callback.message,
+            "⚡ <b>Цей час щойно зайняв інший клієнт.</b>\n\n"
+            "Оберіть інший слот — ваша анкета збережена 👇",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="🗓 Обрати інший час", callback_data="ttt_book:back_time")],
+                [types.InlineKeyboardButton(text="❌ Скасувати", callback_data="ttt_book:cancel")],
+            ]),
+        )
+        return
 
     deposit_amount = await _get_deposit(session, registered_bot_id)
     deposit = ApptDeposit(
@@ -990,6 +1057,8 @@ async def booking_confirm(
     )
     session.add(deposit)
     client.bookings_count = (client.bookings_count or 0) + 1
+    for rem in _build_reminders(booking):
+        session.add(rem)
     await session.commit()
 
     await state.update_data(booking_id=booking.id)
@@ -1093,6 +1162,20 @@ async def deposit_screenshot(
     booking_id = data.get("booking_id")
     if not booking_id:
         await message.answer("Помилка: запис не знайдено. Спробуйте знову /start")
+        return
+
+    # Guard: booking might have been cancelled by master while client was paying
+    booking_check = await session.get(ApptBooking, booking_id)
+    if not booking_check or booking_check.status not in (
+        ApptBookingStatus.AWAITING_DEPOSIT,
+        ApptBookingStatus.PENDING,
+    ):
+        await state.clear()
+        await message.answer(
+            "⚠️ <b>Ваш запис було скасовано — скріншот не прийнято.</b>\n\n"
+            "Запишіться знову через /start",
+            reply_markup=_home_kb(),
+        )
         return
 
     file_id = message.photo[-1].file_id

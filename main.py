@@ -2,6 +2,7 @@
 MasterLug Dispatcher — FastAPI entry point.
 """
 
+import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -162,8 +163,18 @@ async def lifespan(app: FastAPI):
             if demo_beauty_bot:
                 await demo_beauty_bot.session.close()
 
+    # ── Background workers ────────────────────────────────────────────────────
+    from app.services.reminder_worker import reminder_worker_loop
+    _reminder_task = asyncio.create_task(reminder_worker_loop(), name="reminder_worker")
+    logger.info("Reminder worker scheduled.")
+
     yield
     # ── Shutdown ──────────────────────────────────────────────────────────────
+    _reminder_task.cancel()
+    try:
+        await _reminder_task
+    except asyncio.CancelledError:
+        pass
     await close_redis()
     logger.info("MasterLug Dispatcher stopped.")
 

@@ -8,6 +8,7 @@ Architecture decision: ONE shared Dispatcher, MANY Bot instances.
 """
 
 import logging
+from datetime import timedelta
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -45,6 +46,8 @@ async def _get_dispatcher() -> Dispatcher:
     storage = RedisStorage(
         redis=redis,
         key_builder=DefaultKeyBuilder(prefix="masterlug_fsm", with_bot_id=True),
+        state_ttl=timedelta(hours=24),
+        data_ttl=timedelta(hours=24),
     )
 
     dp = Dispatcher(storage=storage)

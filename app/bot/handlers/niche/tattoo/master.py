@@ -2,8 +2,11 @@
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, types
+
+_TZ = ZoneInfo("Europe/Kyiv")
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -295,6 +298,9 @@ async def booking_action(
     now = datetime.now(timezone.utc)
 
     if action == "confirm_deposit":
+        if booking.status != ApptBookingStatus.AWAITING_DEPOSIT:
+            await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
+            return
         booking.status = ApptBookingStatus.CONFIRMED
         if deposit:
             deposit.status = ApptDepositStatus.CONFIRMED
@@ -328,6 +334,12 @@ async def booking_action(
             pass
 
     elif action == "reject":
+        if booking.status not in (
+            ApptBookingStatus.AWAITING_DEPOSIT,
+            ApptBookingStatus.PENDING,
+        ):
+            await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
+            return
         booking.status = ApptBookingStatus.CANCELLED_BY_MASTER
         booking.cancel_reason = "Відхилено майстром"
         if deposit:
@@ -771,7 +783,7 @@ async def blocked_view(
         .order_by(ApptBlockedDate.date_start)
     )).scalars().all()
 
-    today = date.today()
+    today = datetime.now(_TZ).date()
     active = [b for b in blocked if b.date_end >= today]
 
     if not active:

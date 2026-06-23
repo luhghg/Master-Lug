@@ -910,13 +910,15 @@ async def settings_reminders(
         on = rems.get(key, True)
         mark = "✅" if on else "◻️"
         rows.append([types.InlineKeyboardButton(
-            text=f"{mark} {label}", callback_data=f"ttts_rem_tog:{key}"
+            text=f"{mark} {label} (незабаром)", callback_data=f"ttts_rem_tog:{key}"
         )])
     rows.append([types.InlineKeyboardButton(text="✅ Зберегти", callback_data="ttts_rem_save")])
     rows.append([_back_to_settings_btn()])
     await _safe_edit(
         callback.message,
-        "🔔 <b>Нагадування</b>\n\nОберіть активні нагадування:",
+        "🔔 <b>Нагадування</b>\n\n"
+        "⚙️ Налаштуйте заздалегідь — нагадування запрацюють після підтвердження роботи в продакшні.\n\n"
+        "Оберіть активні нагадування:",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
@@ -936,7 +938,7 @@ async def settings_rem_toggle(
         on = rems.get(k, True)
         mark = "✅" if on else "◻️"
         rows.append([types.InlineKeyboardButton(
-            text=f"{mark} {label}", callback_data=f"ttts_rem_tog:{k}"
+            text=f"{mark} {label} (незабаром)", callback_data=f"ttts_rem_tog:{k}"
         )])
     rows.append([types.InlineKeyboardButton(text="✅ Зберегти", callback_data="ttts_rem_save")])
     rows.append([_back_to_settings_btn()])

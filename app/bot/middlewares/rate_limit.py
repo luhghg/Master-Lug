@@ -28,8 +28,9 @@ class RateLimitMiddleware(BaseMiddleware):
         if not user_id:
             return await handler(event, data)
 
+        bot_id = data.get("registered_bot_id", 0)
         redis = await get_redis()
-        key = f"rl:{user_id}"
+        key = f"rl:{bot_id}:{user_id}"
 
         count = await redis.incr(key)
         if count == 1:
