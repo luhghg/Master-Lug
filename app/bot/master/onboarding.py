@@ -540,7 +540,12 @@ async def got_token(message: types.Message, state: FSMContext, session: AsyncSes
         await webhook_bot.session.close()
     except Exception:
         logger.exception("Failed to configure @%s", bot_info.username)
-        await message.answer("⚠️ Бот зареєстровано, але webhook не налаштувався. Зверніться до підтримки.")
+        registered.is_active = False
+        await session.commit()
+        await message.answer(
+            "⚠️ Бот зареєстровано, але webhook не налаштувався. "
+            "Бот тимчасово деактивовано — зверніться до підтримки."
+        )
         await state.clear()
         return
 

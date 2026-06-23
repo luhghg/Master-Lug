@@ -14,6 +14,7 @@ from app.models.tattoo import TattooService
 from app.services.config_service import get_cfg, get_json, set_cfg, set_json
 from app.bot.handlers.niche.tattoo.wizard import (
     TTT_ONBOARDING_DONE, TTT_MASTER_NAME, TTT_MASTER_BIO, TTT_MASTER_CITY,
+    TTT_MASTER_SOCIAL,
     TTT_STYLES, TTT_DEPOSIT_ENABLED, TTT_DEPOSIT_AMOUNT, TTT_CARD_NUMBER,
     TTT_DEPOSIT_PURPOSE, TTT_QUESTIONNAIRE, TTT_REMINDERS,
     TTT_MSG_WELCOME, TTT_MSG_CONFIRM, TTT_MSG_REMINDER_TPL, TTT_MSG_AFTERCARE,
@@ -31,6 +32,7 @@ class TattooSettingsFSM(StatesGroup):
     s_name           = State()
     s_bio            = State()
     s_city           = State()
+    s_social         = State()
     s_sched_days     = State()
     s_sched_start    = State()   # text: HH:MM
     s_sched_end      = State()   # text: HH:MM
@@ -109,19 +111,22 @@ async def settings_profile(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
-    name = await get_cfg(session, registered_bot_id, TTT_MASTER_NAME, "—")
-    bio  = await get_cfg(session, registered_bot_id, TTT_MASTER_BIO,  "—")
-    city = await get_cfg(session, registered_bot_id, TTT_MASTER_CITY, "—")
+    name   = await get_cfg(session, registered_bot_id, TTT_MASTER_NAME,   "—")
+    bio    = await get_cfg(session, registered_bot_id, TTT_MASTER_BIO,    "—")
+    city   = await get_cfg(session, registered_bot_id, TTT_MASTER_CITY,   "—")
+    social = await get_cfg(session, registered_bot_id, TTT_MASTER_SOCIAL, "—")
     text = (
         f"👤 <b>Профіль майстра</b>\n\n"
         f"Ім'я: <b>{name}</b>\n"
         f"Місто: <b>{city}</b>\n"
+        f"Контакти: <b>{social}</b>\n"
         f"Опис: {bio}"
     )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✏️ Ім'я/назва",   callback_data="ttts_prof_edit:name")],
-        [types.InlineKeyboardButton(text="✏️ Опис",         callback_data="ttts_prof_edit:bio")],
-        [types.InlineKeyboardButton(text="✏️ Місто",        callback_data="ttts_prof_edit:city")],
+        [types.InlineKeyboardButton(text="✏️ Ім'я/назва",          callback_data="ttts_prof_edit:name")],
+        [types.InlineKeyboardButton(text="✏️ Опис",                callback_data="ttts_prof_edit:bio")],
+        [types.InlineKeyboardButton(text="✏️ Місто",               callback_data="ttts_prof_edit:city")],
+        [types.InlineKeyboardButton(text="✏️ Контакти/соц. мережі", callback_data="ttts_prof_edit:social")],
         [_back_to_settings_btn()],
     ])
     await _safe_edit(callback.message, text, reply_markup=kb)
@@ -134,9 +139,10 @@ async def settings_profile_edit(
 ) -> None:
     field = callback.data.split(":")[1]
     prompts = {
-        "name": ("✏️ Введіть нове ім'я або назву студії:", TattooSettingsFSM.s_name),
-        "bio":  ("✏️ Введіть новий опис (до 300 символів):", TattooSettingsFSM.s_bio),
-        "city": ("✏️ Введіть нове місто:", TattooSettingsFSM.s_city),
+        "name":   ("✏️ Введіть нове ім'я або назву студії:", TattooSettingsFSM.s_name),
+        "bio":    ("✏️ Введіть новий опис (до 300 символів):", TattooSettingsFSM.s_bio),
+        "city":   ("✏️ Введіть нове місто:", TattooSettingsFSM.s_city),
+        "social": ("✏️ Введіть Instagram, Telegram або сайт (до 100 символів):\n\nПриклади: <code>@my_tattoo</code> · <code>t.me/my_studio</code> · <code>instagram.com/my_tattoo</code>", TattooSettingsFSM.s_social),
     }
     if field not in prompts:
         await callback.answer()
@@ -168,7 +174,10 @@ async def settings_profile_save(
     if field == "bio" and len(value) > 300:
         await message.answer("Максимум 300 символів:")
         return
-    key_map = {"name": TTT_MASTER_NAME, "bio": TTT_MASTER_BIO, "city": TTT_MASTER_CITY}
+    if field == "social" and len(value) > 100:
+        await message.answer("Максимум 100 символів:")
+        return
+    key_map = {"name": TTT_MASTER_NAME, "bio": TTT_MASTER_BIO, "city": TTT_MASTER_CITY, "social": TTT_MASTER_SOCIAL}
     if field in key_map:
         await set_cfg(session, registered_bot_id, key_map[field], value)
     await state.clear()
@@ -1195,9 +1204,10 @@ def register(dp: Dispatcher) -> None:
     # Profile
     dp.callback_query.register(settings_profile,      F.data == "ttts_prof")
     dp.callback_query.register(settings_profile_edit, F.data.startswith("ttts_prof_edit:"))
-    dp.message.register(settings_profile_save, TattooSettingsFSM.s_name,  F.text)
-    dp.message.register(settings_profile_save, TattooSettingsFSM.s_bio,   F.text)
-    dp.message.register(settings_profile_save, TattooSettingsFSM.s_city,  F.text)
+    dp.message.register(settings_profile_save, TattooSettingsFSM.s_name,   F.text)
+    dp.message.register(settings_profile_save, TattooSettingsFSM.s_bio,    F.text)
+    dp.message.register(settings_profile_save, TattooSettingsFSM.s_city,   F.text)
+    dp.message.register(settings_profile_save, TattooSettingsFSM.s_social, F.text)
 
     # Schedule
     dp.callback_query.register(settings_schedule,         F.data == "ttts_schedule")

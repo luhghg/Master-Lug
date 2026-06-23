@@ -36,6 +36,7 @@ TTT_MSG_DEPOSIT      = "ttt_msg_deposit"
 TTT_MIN_AGE_ENABLED  = "ttt_min_age_enabled"
 TTT_MIN_AGE_TEXT     = "ttt_min_age_text"
 TTT_CANCEL_HOURS     = "ttt_cancel_hours"
+TTT_MASTER_SOCIAL    = "ttt_social"
 
 _TMPL = {
     TTT_MSG_WELCOME: "👋 <b>Ласкаво просимо!</b>\n\nОберіть що вас цікавить:",
@@ -187,7 +188,7 @@ def _duration_kb() -> types.InlineKeyboardMarkup:
         [types.InlineKeyboardButton(text=lbl, callback_data=f"tttw_sched_dur:{m}") for lbl, m in quick[:3]],
         [types.InlineKeyboardButton(text=lbl, callback_data=f"tttw_sched_dur:{m}") for lbl, m in quick[3:]],
         [types.InlineKeyboardButton(text="✏️ Вказати своє (хвилини)", callback_data="tttw_sched_dur_custom")],
-        [_back_btn(4), _interrupt_btn()],
+        [_sched_sub_back_btn("end"), _interrupt_btn()],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -198,13 +199,21 @@ def _buffer_kb() -> types.InlineKeyboardMarkup:
         [types.InlineKeyboardButton(text=lbl, callback_data=f"tttw_sched_buf:{m}") for lbl, m in quick[:3]],
         [types.InlineKeyboardButton(text=lbl, callback_data=f"tttw_sched_buf:{m}") for lbl, m in quick[2:]],
         [types.InlineKeyboardButton(text="✏️ Вказати своє (хвилини)", callback_data="tttw_sched_buf_custom")],
-        [_back_btn(4), _interrupt_btn()],
+        [_sched_sub_back_btn("dur"), _interrupt_btn()],
     ]
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _sched_nav_kb(back_step: int = 3) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=[[_back_btn(back_step), _interrupt_btn()]])
+
+
+def _sched_sub_back_btn(target: str) -> types.InlineKeyboardButton:
+    return types.InlineKeyboardButton(text="◀️ Назад", callback_data=f"tttw_sched_back:{target}")
+
+
+def _sched_sub_back_kb(target: str) -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[[_sched_sub_back_btn(target), _interrupt_btn()]])
 
 
 def _quest_kb(state_dict: dict) -> types.InlineKeyboardMarkup:
@@ -625,9 +634,9 @@ async def w_days_done(callback: types.CallbackQuery, state: FSMContext) -> None:
     await state.set_state(TattooWizardFSM.w_sched_start)
     prompt = _step_header(4, "🗓 <b>Розклад</b>\n\nВведіть час <b>початку</b> роботи у форматі ГГ:ХХ\n(наприклад: <code>09:00</code> або <code>10:30</code>):")
     try:
-        await callback.message.edit_text(prompt, reply_markup=_sched_nav_kb(back_step=3))
+        await callback.message.edit_text(prompt, reply_markup=_sched_nav_kb(back_step=4))
     except Exception:
-        await callback.message.answer(prompt, reply_markup=_sched_nav_kb(back_step=3))
+        await callback.message.answer(prompt, reply_markup=_sched_nav_kb(back_step=4))
     await callback.answer()
 
 
@@ -636,14 +645,14 @@ async def w_sched_start_input(message: types.Message, state: FSMContext) -> None
     if t is None:
         await message.answer(
             "❌ Невірний формат. Введіть час у форматі ГГ:ХХ, наприклад: <code>09:00</code>",
-            reply_markup=_sched_nav_kb(back_step=3),
+            reply_markup=_sched_nav_kb(back_step=4),
         )
         return
     await state.update_data(w_sched_start=t)
     await state.set_state(TattooWizardFSM.w_sched_end)
     await message.answer(
         _step_header(4, f"🗓 <b>Розклад</b>\n\n✅ Початок: <b>{t}</b>\n\nВведіть час <b>закінчення</b> роботи (наприклад: <code>18:00</code>):"),
-        reply_markup=_sched_nav_kb(back_step=3),
+        reply_markup=_sched_sub_back_kb("start"),
     )
 
 
@@ -652,7 +661,7 @@ async def w_sched_end_input(message: types.Message, state: FSMContext) -> None:
     if t is None:
         await message.answer(
             "❌ Невірний формат. Введіть час у форматі ГГ:ХХ, наприклад: <code>18:00</code>",
-            reply_markup=_sched_nav_kb(back_step=3),
+            reply_markup=_sched_sub_back_kb("start"),
         )
         return
     data = await state.get_data()
@@ -662,7 +671,7 @@ async def w_sched_end_input(message: types.Message, state: FSMContext) -> None:
     if eh * 60 + em <= sh * 60 + sm:
         await message.answer(
             f"❌ Час закінчення (<b>{t}</b>) має бути <b>пізнішим</b> за час початку (<b>{start}</b>).\n\nВведіть час закінчення ще раз:",
-            reply_markup=_sched_nav_kb(back_step=3),
+            reply_markup=_sched_sub_back_kb("start"),
         )
         return
     await state.update_data(w_sched_end=t)
@@ -696,12 +705,12 @@ async def w_sched_dur_custom_btn(callback: types.CallbackQuery, state: FSMContex
     try:
         await callback.message.edit_text(
             _step_header(4, "🗓 <b>Розклад</b>\n\nВведіть тривалість сеансу в хвилинах (15–720):"),
-            reply_markup=_sched_nav_kb(back_step=4),
+            reply_markup=_sched_sub_back_kb("dur"),
         )
     except Exception:
         await callback.message.answer(
             _step_header(4, "🗓 <b>Розклад</b>\n\nВведіть тривалість сеансу в хвилинах (15–720):"),
-            reply_markup=_sched_nav_kb(back_step=4),
+            reply_markup=_sched_sub_back_kb("dur"),
         )
 
 
@@ -710,7 +719,7 @@ async def w_sched_dur_custom_input(message: types.Message, state: FSMContext) ->
     if mins is None:
         await message.answer(
             "❌ Введіть ціле число від 15 до 720 хвилин (наприклад: <code>90</code>):",
-            reply_markup=_sched_nav_kb(back_step=4),
+            reply_markup=_sched_sub_back_kb("dur"),
         )
         return
     await state.update_data(w_sched_duration=mins)
@@ -801,12 +810,12 @@ async def w_sched_buf_custom_btn(callback: types.CallbackQuery, state: FSMContex
     try:
         await callback.message.edit_text(
             _step_header(4, "🗓 <b>Розклад</b>\n\nВведіть паузу між сеансами в хвилинах (0–120):"),
-            reply_markup=_sched_nav_kb(back_step=4),
+            reply_markup=_sched_sub_back_kb("buf"),
         )
     except Exception:
         await callback.message.answer(
             _step_header(4, "🗓 <b>Розклад</b>\n\nВведіть паузу між сеансами в хвилинах (0–120):"),
-            reply_markup=_sched_nav_kb(back_step=4),
+            reply_markup=_sched_sub_back_kb("buf"),
         )
 
 
@@ -818,7 +827,7 @@ async def w_sched_buf_custom_input(
     if buf is None:
         await message.answer(
             "❌ Введіть ціле число від 0 до 120 хвилин (наприклад: <code>0</code> або <code>30</code>):",
-            reply_markup=_sched_nav_kb(back_step=4),
+            reply_markup=_sched_sub_back_kb("buf"),
         )
         return
     saved = await _do_save_schedule(state, session, registered_bot_id, buf)
@@ -1291,6 +1300,49 @@ async def _goto_step_number(
 
 # ── Back navigation ────────────────────────────────────────────────────────────
 
+async def w_sched_back(callback: types.CallbackQuery, state: FSMContext) -> None:
+    """Handles back navigation within schedule sub-steps (days→start→end→dur→buf)."""
+    target = callback.data.split(":")[1]
+    await callback.answer()
+    data = await state.get_data()
+
+    if target == "start":
+        await state.set_state(TattooWizardFSM.w_sched_start)
+        prompt = _step_header(4, "🗓 <b>Розклад</b>\n\nВведіть час <b>початку</b> роботи у форматі ГГ:ХХ\n(наприклад: <code>09:00</code> або <code>10:30</code>):")
+        try:
+            await callback.message.edit_text(prompt, reply_markup=_sched_nav_kb(back_step=4))
+        except Exception:
+            await callback.message.answer(prompt, reply_markup=_sched_nav_kb(back_step=4))
+
+    elif target == "end":
+        start = data.get("w_sched_start", "??:??")
+        await state.set_state(TattooWizardFSM.w_sched_end)
+        prompt = _step_header(4, f"🗓 <b>Розклад</b>\n\n✅ Початок: <b>{start}</b>\n\nВведіть час <b>закінчення</b> роботи (наприклад: <code>18:00</code>):")
+        try:
+            await callback.message.edit_text(prompt, reply_markup=_sched_sub_back_kb("start"))
+        except Exception:
+            await callback.message.answer(prompt, reply_markup=_sched_sub_back_kb("start"))
+
+    elif target == "dur":
+        start = data.get("w_sched_start", "??:??")
+        end = data.get("w_sched_end", "??:??")
+        await state.set_state(TattooWizardFSM.w_sched_duration)
+        text = _step_header(4, f"🗓 <b>Розклад</b>\n\n✅ {start} – {end}\n\nТривалість одного сеансу:")
+        try:
+            await callback.message.edit_text(text, reply_markup=_duration_kb())
+        except Exception:
+            await callback.message.answer(text, reply_markup=_duration_kb())
+
+    elif target == "buf":
+        dur = data.get("w_sched_duration", 60)
+        await state.set_state(TattooWizardFSM.w_sched_buffer)
+        text = _step_header(4, f"🗓 <b>Розклад</b>\n\n✅ Тривалість: <b>{dur} хв</b>\n\nПауза між сеансами (буфер):")
+        try:
+            await callback.message.edit_text(text, reply_markup=_buffer_kb())
+        except Exception:
+            await callback.message.answer(text, reply_markup=_buffer_kb())
+
+
 async def w_back(
     callback: types.CallbackQuery,
     state: FSMContext,
@@ -1313,7 +1365,8 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(w_interrupt, F.data == "tttw_interrupt")
 
     # Back navigation
-    dp.callback_query.register(w_back, F.data.startswith("tttw_back:"))
+    dp.callback_query.register(w_back,       F.data.startswith("tttw_back:"))
+    dp.callback_query.register(w_sched_back, F.data.startswith("tttw_sched_back:"))
 
     # Step 1 — profile
     dp.message.register(w_name_input,  TattooWizardFSM.w_name,  F.text)

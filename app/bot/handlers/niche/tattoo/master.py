@@ -371,6 +371,9 @@ async def booking_action(
             pass
 
     elif action == "complete":
+        if booking.status != ApptBookingStatus.CONFIRMED:
+            await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
+            return
         booking.status = ApptBookingStatus.COMPLETED
         await session.commit()
         await callback.answer("✔️ Сеанс завершено!")
@@ -405,6 +408,9 @@ async def booking_action(
             pass
 
     elif action == "noshow":
+        if booking.status != ApptBookingStatus.CONFIRMED:
+            await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
+            return
         booking.status = ApptBookingStatus.NO_SHOW
         if deposit:
             deposit.status = ApptDepositStatus.KEPT
@@ -425,6 +431,12 @@ async def booking_action(
             pass
 
     elif action == "cancel_return":
+        if booking.status not in (
+            ApptBookingStatus.CONFIRMED,
+            ApptBookingStatus.AWAITING_DEPOSIT,
+        ):
+            await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
+            return
         booking.status = ApptBookingStatus.CANCELLED_BY_MASTER
         booking.cancel_reason = "Скасовано майстром з поверненням депозиту"
         if deposit:

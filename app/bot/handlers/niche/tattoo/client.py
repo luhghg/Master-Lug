@@ -940,12 +940,12 @@ def _build_reminders(booking: ApptBooking) -> list[ApptReminder]:
                 status=ReminderStatus.PENDING,
                 scheduled_at=scheduled.astimezone(timezone.utc),
             ))
-    # Review reminder: 3 hours after session end
+    # Review reminder: 3 days after session
     reminders.append(ApptReminder(
         booking_id=booking.id,
         reminder_type=ReminderType.REVIEW,
         status=ReminderStatus.PENDING,
-        scheduled_at=(slot_dt + timedelta(hours=3)).astimezone(timezone.utc),
+        scheduled_at=(slot_dt + timedelta(days=3)).astimezone(timezone.utc),
     ))
     return reminders
 
@@ -959,6 +959,9 @@ async def booking_confirm(
     bot: Bot,
 ) -> None:
     data = await state.get_data()
+    if not data.get("slot_date"):
+        await callback.answer()
+        return
     user = callback.from_user
 
     client = await _upsert_client(session, registered_bot_id, user)
@@ -1002,7 +1005,6 @@ async def booking_confirm(
         for rem in _build_reminders(booking):
             session.add(rem)
         await session.commit()
-        await state.clear()
         await callback.answer()
         await _safe_edit(
             callback.message,
@@ -1011,6 +1013,7 @@ async def booking_confirm(
             f"Чекаємо вас! 🙏",
             reply_markup=_home_kb(),
         )
+        await state.clear()
         await _notify_master_new_booking(
             bot, owner_telegram_id, booking, client, user, 0, registered_bot_id,
             deposit_enabled=False,
@@ -1164,13 +1167,12 @@ async def deposit_screenshot(
         await message.answer("Помилка: запис не знайдено. Спробуйте знову /start")
         return
 
+    # Claim this screenshot immediately — second concurrent tap finds empty state
+    await state.clear()
+
     # Guard: booking might have been cancelled by master while client was paying
     booking_check = await session.get(ApptBooking, booking_id)
-    if not booking_check or booking_check.status not in (
-        ApptBookingStatus.AWAITING_DEPOSIT,
-        ApptBookingStatus.PENDING,
-    ):
-        await state.clear()
+    if not booking_check or booking_check.status != ApptBookingStatus.AWAITING_DEPOSIT:
         await message.answer(
             "⚠️ <b>Ваш запис було скасовано — скріншот не прийнято.</b>\n\n"
             "Запишіться знову через /start",
@@ -1190,7 +1192,6 @@ async def deposit_screenshot(
         deposit.paid_at = now
         await session.commit()
 
-    await state.clear()
     await message.answer(
         "✅ <b>Скріншот отримано!</b>\n\n"
         "Майстер перевірить оплату і підтвердить запис — зазвичай протягом кількох годин.\n\n"
