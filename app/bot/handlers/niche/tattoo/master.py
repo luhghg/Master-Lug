@@ -924,11 +924,15 @@ async def admin_portfolio(
     ]
     rows.append([types.InlineKeyboardButton(text="➕ Додати роботу", callback_data="tttm_portfolio_add")])
     rows.append([types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")])
-    await callback.message.edit_text(
+    text = (
         f"🎨 <b>Портфоліо</b> ({count} робіт):\n\n"
-        "Натисніть на роботу щоб <b>переглянути</b>:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        "Натисніть на роботу щоб <b>переглянути</b>:"
     )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
 
 
