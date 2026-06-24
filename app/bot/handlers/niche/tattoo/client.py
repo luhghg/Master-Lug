@@ -960,11 +960,26 @@ async def booking_confirm(
 ) -> None:
     await callback.answer()
     data = await state.get_data()
+    logger.info(
+        "booking_confirm: bot=%s user=%s slot_date=%r slot_time=%r",
+        registered_bot_id, callback.from_user.id,
+        data.get("slot_date"), data.get("slot_time"),
+    )
     if not data.get("slot_date"):
-        return  # double-tap guard: state already cleared
+        await _safe_edit(
+            callback.message,
+            "⚠️ Сесія бронювання завершилась — почніть запис заново.",
+            reply_markup=_home_kb(),
+        )
+        return
     user = callback.from_user
 
-    client = await _upsert_client(session, registered_bot_id, user)
+    try:
+        client = await _upsert_client(session, registered_bot_id, user)
+    except Exception:
+        logger.exception("booking_confirm: _upsert_client failed bot=%s", registered_bot_id)
+        await _safe_edit(callback.message, "⚠️ Помилка при оформленні запису. Спробуйте ще раз.", reply_markup=_home_kb())
+        return
     d = date.fromisoformat(data["slot_date"])
     day_ua = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"][d.weekday()]
     deposit_enabled = await _get_deposit_enabled(session, registered_bot_id)
