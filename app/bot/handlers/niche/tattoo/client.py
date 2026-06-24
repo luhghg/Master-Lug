@@ -581,7 +581,7 @@ async def _show_price(
     )
     services = list(result.scalars().all())
     if not services:
-        await _safe_edit(message, "💰 Прайс-лист ще не налаштовано.", reply_markup=_home_kb())
+        await _safe_edit(message, "💰 Майстер ще не додав послуги.", reply_markup=_home_kb())
         return
     lines = [f"• <b>{s.name}</b> — {s.price}" for s in services]
     deposit = await _get_deposit(session, bot_id)
@@ -958,10 +958,10 @@ async def booking_confirm(
     owner_telegram_id: int,
     bot: Bot,
 ) -> None:
+    await callback.answer()
     data = await state.get_data()
     if not data.get("slot_date"):
-        await callback.answer()
-        return
+        return  # double-tap guard: state already cleared
     user = callback.from_user
 
     client = await _upsert_client(session, registered_bot_id, user)
@@ -990,7 +990,6 @@ async def booking_confirm(
             await session.flush()
         except IntegrityError:
             await session.rollback()
-            await callback.answer()
             await _safe_edit(
                 callback.message,
                 "⚡ <b>Цей час щойно зайняв інший клієнт.</b>\n\n"
@@ -1005,7 +1004,6 @@ async def booking_confirm(
         for rem in _build_reminders(booking):
             session.add(rem)
         await session.commit()
-        await callback.answer()
         await _safe_edit(
             callback.message,
             f"✅ <b>Ваш запис підтверджено!</b>\n\n"
@@ -1040,7 +1038,6 @@ async def booking_confirm(
         await session.flush()
     except IntegrityError:
         await session.rollback()
-        await callback.answer()
         await _safe_edit(
             callback.message,
             "⚡ <b>Цей час щойно зайняв інший клієнт.</b>\n\n"
@@ -1065,7 +1062,6 @@ async def booking_confirm(
     await session.commit()
 
     await state.update_data(booking_id=booking.id)
-    await callback.answer()
 
     card = await _get_card(session, registered_bot_id)
     card_line = f"💳 Картка: <code>{card}</code>\n" if card else ""

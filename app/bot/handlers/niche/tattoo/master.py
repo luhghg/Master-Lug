@@ -134,13 +134,16 @@ async def admin_list(
     ]
 
     if not rows:
-        await callback.message.edit_text(
-            f"Записів у розділі немає.",
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                tabs_row,
-                [types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")],
-            ]),
-        )
+        try:
+            await callback.message.edit_text(
+                "Записів у розділі немає.",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    tabs_row,
+                    [types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")],
+                ]),
+            )
+        except Exception:
+            pass
         await callback.answer()
         return
 
@@ -909,6 +912,30 @@ async def blocked_delete(
 ) -> None:
     b_id = int(callback.data.split(":")[1])
     b = await session.get(ApptBlockedDate, b_id)
+    if not b or b.bot_id != registered_bot_id:
+        await callback.answer("Не знайдено.")
+        return
+    date_line = f"{b.date_start.strftime('%d.%m.%Y')} – {b.date_end.strftime('%d.%m.%Y')}"
+    reason_line = f"\n📝 {b.reason}" if b.reason else ""
+    await callback.message.edit_text(
+        f"❓ <b>Видалити заблоковані дати?</b>\n\n{date_line}{reason_line}",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text="✅ Так, видалити", callback_data=f"tttm_block_del_yes:{b_id}"),
+                types.InlineKeyboardButton(text="❌ Скасувати",     callback_data="tttm_blocked"),
+            ],
+        ]),
+    )
+    await callback.answer()
+
+
+async def blocked_delete_confirm(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    b_id = int(callback.data.split(":")[1])
+    b = await session.get(ApptBlockedDate, b_id)
     if b and b.bot_id == registered_bot_id:
         await session.delete(b)
         await session.commit()
@@ -1216,8 +1243,8 @@ _HELP_SECTIONS = {
         "Знайдіть запис у <b>Записи → Майбутні</b>, відкрийте його і натисніть «👻 No-show». "
         "Якщо був депозит — він залишається у вас.\n\n"
         "<b>Чому нагадування не надходять клієнтам?</b>\n"
-        "Автоматична відправка нагадувань ще в розробці. Налаштування зберігаються, але бот поки що "
-        "не надсилає нагадувань автоматично — ця функція буде додана в наступних оновленнях."
+        "Нагадування надсилаються автоматично за налаштованими інтервалами після підтвердження запису. "
+        "Якщо нагадування не надходять — перевірте що інтервали увімкнені в <b>Налаштування → Нагадування</b>."
     ),
 }
 
@@ -1301,7 +1328,8 @@ def register(dp: Dispatcher) -> None:
     # Blocked dates
     dp.callback_query.register(blocked_view,       F.data == "tttm_blocked")
     dp.callback_query.register(blocked_add_start,  F.data == "tttm_block_add")
-    dp.callback_query.register(blocked_delete,     F.data.startswith("tttm_block_del:"))
+    dp.callback_query.register(blocked_delete_confirm, F.data.startswith("tttm_block_del_yes:"))
+    dp.callback_query.register(blocked_delete,         F.data.startswith("tttm_block_del:"))
     dp.message.register(blocked_date_start, TattooMasterFSM.block_date_start, F.text)
     dp.message.register(blocked_date_end,   TattooMasterFSM.block_date_end,   F.text)
     dp.message.register(blocked_reason,     TattooMasterFSM.block_reason,     F.text)

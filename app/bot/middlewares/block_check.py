@@ -37,9 +37,9 @@ class BlockCheckMiddleware(BaseMiddleware):
             )
             if result.scalar_one_or_none():
                 if isinstance(event, Message):
-                    await event.answer("⛔ Ви заблоковані в цьому боті.")
+                    await event.answer("⛔ На жаль, ваш доступ до цього бота обмежено. Зверніться до майстра.")
                 elif isinstance(event, CallbackQuery):
-                    await event.answer("⛔ Ви заблоковані в цьому боті.", show_alert=True)
+                    await event.answer("⛔ На жаль, ваш доступ до цього бота обмежено. Зверніться до майстра.", show_alert=True)
                 return
 
         return await handler(event, data)
