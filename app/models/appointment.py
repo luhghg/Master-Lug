@@ -183,7 +183,10 @@ class ApptReminder(Base):
     booking_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("appt_bookings.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    reminder_type: Mapped[ReminderType] = mapped_column(Enum(ReminderType), nullable=False)
+    reminder_type: Mapped[ReminderType] = mapped_column(
+        Enum(ReminderType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
     status: Mapped[ReminderStatus] = mapped_column(
         Enum(ReminderStatus), default=ReminderStatus.PENDING, nullable=False
     )
