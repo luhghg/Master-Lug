@@ -47,6 +47,11 @@ class RegisteredBot(Base):
     )
     referred_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
+    last_grant_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_grant_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

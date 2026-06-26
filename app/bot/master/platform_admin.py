@@ -162,7 +162,7 @@ async def pa_pending(callback: types.CallbackQuery, session: AsyncSession) -> No
 
     await callback.message.edit_text(
         f"💳 <b>Очікують оплати ({len(bots)})</b>\n\n"
-        "Натисніть на бот → <b>📅 +30 днів</b> для активації.",
+        "Натисніть на бот → <b>+7 днів 🎁</b> для безкоштовного тріалу або <b>+30/60/90</b> для підписки.",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
@@ -214,6 +214,12 @@ async def pa_bot_detail(callback: types.CallbackQuery, session: AsyncSession) ->
     product = PRODUCT_NAMES.get(bot.niche, bot.niche.value)
     emoji = NICHE_EMOJI.get(bot.niche, "🤖")
 
+    # Build subscription buttons with "✅ Видано DD.MM" indicator on the last-used button
+    def _sub_btn(label: str, days: int) -> types.InlineKeyboardButton:
+        if bot.last_grant_days == days and bot.last_grant_at:
+            label = f"✅ Видано {bot.last_grant_at.strftime('%d.%m')}"
+        return types.InlineKeyboardButton(text=label, callback_data=f"pa:sub_extend:{bot_id}:{days}")
+
     await callback.message.edit_text(
         f"{emoji} <b>@{bot.bot_username}</b>\n\n"
         f"🆔 Bot ID (для .env): <code>{bot.id}</code>\n"
@@ -224,17 +230,14 @@ async def pa_bot_detail(callback: types.CallbackQuery, session: AsyncSession) ->
         f"Статус: {status_text}"
         f"{extra}",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text=toggle_text,                   callback_data=f"pa:toggle:{bot_id}")],
-            [
-                types.InlineKeyboardButton(text="📅 +30 днів",             callback_data=f"pa:sub_extend:{bot_id}:30"),
-                types.InlineKeyboardButton(text="📅 +60 днів",             callback_data=f"pa:sub_extend:{bot_id}:60"),
-                types.InlineKeyboardButton(text="📅 +90 днів",             callback_data=f"pa:sub_extend:{bot_id}:90"),
-            ],
+            [types.InlineKeyboardButton(text=toggle_text, callback_data=f"pa:toggle:{bot_id}")],
+            [_sub_btn("+7 днів 🎁", 7)],
+            [_sub_btn("+30 днів", 30), _sub_btn("+60 днів", 60), _sub_btn("+90 днів", 90)],
             [types.InlineKeyboardButton(text="💳 Надіслати запит на оплату", callback_data=f"pa:pay_request:{bot_id}")],
-            [types.InlineKeyboardButton(text="🗑 Видалити бот",            callback_data=f"pa:delete_confirm:{bot_id}")],
+            [types.InlineKeyboardButton(text="🗑 Видалити бот",              callback_data=f"pa:delete_confirm:{bot_id}")],
             [
-                types.InlineKeyboardButton(text="◀️ Всі боти",             callback_data="pa:bots:0"),
-                types.InlineKeyboardButton(text="🏠 Панель",               callback_data="pa:home"),
+                types.InlineKeyboardButton(text="◀️ Всі боти", callback_data="pa:bots:0"),
+                types.InlineKeyboardButton(text="🏠 Панель",   callback_data="pa:home"),
             ],
         ]),
     )
@@ -355,19 +358,20 @@ async def pa_sub_extend(
     base = max(reg_bot.subscription_expires_at or now, now)
     reg_bot.subscription_expires_at = base + timedelta(days=days)
     reg_bot.is_active = True
+    reg_bot.last_grant_at = now
+    reg_bot.last_grant_days = days
     await session.commit()
 
     new_date = reg_bot.subscription_expires_at.strftime("%d.%m.%Y")
     await callback.answer(f"✅ +{days} днів. Підписка до {new_date}", show_alert=True)
 
+    if days == 7:
+        owner_msg = "✅ Ваш бот активовано на 7 днів безкоштовно. Спробуйте всі функції!"
+    else:
+        owner_msg = f"✅ Підписку продовжено на {days} днів. Дякуємо!\n\n📅 Активна до: <b>{new_date}</b>"
+
     try:
-        await bot.send_message(
-            chat_id=reg_bot.owner_telegram_id,
-            text=(
-                f"✅ <b>Підписку на @{reg_bot.bot_username} продовжено!</b>\n\n"
-                f"📅 Активна до: <b>{new_date}</b>"
-            ),
-        )
+        await bot.send_message(chat_id=reg_bot.owner_telegram_id, text=owner_msg)
     except Exception:
         pass
 
