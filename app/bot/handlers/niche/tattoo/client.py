@@ -20,7 +20,7 @@ from app.models.appointment import (
     ApptScheduleOverride, ReminderStatus, ReminderType,
 )
 from app.models.tattoo import TattooPortfolio, TattooReview, ReviewStatus, TattooService
-from app.services.config_service import get_cfg, is_demo_bot
+from app.services.config_service import get_cfg, set_cfg, is_demo_bot
 
 _TZ = ZoneInfo("Europe/Kyiv")
 
@@ -1149,10 +1149,12 @@ async def booking_confirm(
     )
     await state.set_state(TattooClientFSM.screenshot)
 
-    # Notify master
-    await _notify_master_new_booking(
+    # Notify master — store message_id so screenshot can be sent as reply
+    msg_id = await _notify_master_new_booking(
         bot, owner_telegram_id, booking, client, user, deposit_amount, registered_bot_id,
     )
+    if msg_id is not None:
+        await set_cfg(session, registered_bot_id, f"ttt_bk_msg_{booking.id}", str(msg_id))
 
 
 async def _notify_master_new_booking(
@@ -1164,7 +1166,7 @@ async def _notify_master_new_booking(
     deposit: int,
     bot_id: int,
     deposit_enabled: bool = True,
-) -> None:
+) -> int | None:
     demo = is_demo_bot(bot_id)
     notify_id = user.id if demo else owner_id
     prefix = "📬 <b>[ДЕМО] Ось як виглядає повідомлення майстру:</b>\n\n" if demo else ""
@@ -1205,9 +1207,11 @@ async def _notify_master_new_booking(
         f"ID запису: #{booking.id}"
     )
     try:
-        await bot.send_message(chat_id=notify_id, text=text, reply_markup=kb)
+        sent = await bot.send_message(chat_id=notify_id, text=text, reply_markup=kb)
+        return sent.message_id
     except Exception as e:
         logger.warning("Could not notify master about new booking: %s", e)
+        return None
 
 
 async def deposit_screenshot(
@@ -1270,30 +1274,56 @@ async def deposit_screenshot(
     mention = f"@{user.username}" if user.username else user.full_name or str(user.id)
     prefix = "📬 <b>[ДЕМО] Повідомлення майстру:</b>\n\n" if demo else ""
 
-    try:
-        await bot.send_photo(
-            chat_id=notify_id,
-            photo=file_id,
-            caption=(
-                f"{prefix}"
-                f"📸 <b>{mention} надіслав скріншот депозиту!</b>\n\n"
-                f"Запис #{booking_id}"
+    confirm_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(
+                text="✅ Підтвердити оплату",
+                callback_data=f"tttm_bk:{booking_id}:confirm_deposit",
             ),
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text="✅ Підтвердити оплату",
-                        callback_data=f"tttm_bk:{booking_id}:confirm_deposit",
-                    ),
-                    types.InlineKeyboardButton(
-                        text="❌ Відхилити",
-                        callback_data=f"tttm_bk:{booking_id}:reject",
-                    ),
-                ],
-            ]),
-        )
-    except Exception as e:
-        logger.warning("Could not send screenshot to master: %s", e)
+            types.InlineKeyboardButton(
+                text="❌ Відхилити",
+                callback_data=f"tttm_bk:{booking_id}:cancel_pre",
+            ),
+        ],
+    ])
+
+    master_msg_id_str = await get_cfg(session, registered_bot_id, f"ttt_bk_msg_{booking_id}")
+    if master_msg_id_str and master_msg_id_str.isdigit():
+        master_msg_id = int(master_msg_id_str)
+        # Update original notification: add confirm+reject buttons
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=notify_id,
+                message_id=master_msg_id,
+                reply_markup=confirm_kb,
+            )
+        except Exception:
+            pass
+        # Send screenshot as reply to original notification (no action buttons — they're on original)
+        try:
+            await bot.send_photo(
+                chat_id=notify_id,
+                photo=file_id,
+                caption=f"{prefix}📸 Скріншот оплати від {mention} (запис #{booking_id})",
+                reply_to_message_id=master_msg_id,
+            )
+        except Exception as e:
+            logger.warning("Could not send screenshot to master: %s", e)
+    else:
+        # Fallback: original notification message not stored — send standalone photo with buttons
+        try:
+            await bot.send_photo(
+                chat_id=notify_id,
+                photo=file_id,
+                caption=(
+                    f"{prefix}"
+                    f"📸 <b>{mention} надіслав скріншот депозиту!</b>\n\n"
+                    f"Запис #{booking_id}"
+                ),
+                reply_markup=confirm_kb,
+            )
+        except Exception as e:
+            logger.warning("Could not send screenshot to master: %s", e)
 
 
 # ── Back navigation ───────────────────────────────────────────────────────────

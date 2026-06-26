@@ -67,7 +67,7 @@ class TattooMasterFSM(StatesGroup):
 def _admin_markup() -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [
-            types.InlineKeyboardButton(text="📋 Записи",    callback_data="tttm_list:pending"),
+            types.InlineKeyboardButton(text="📋 Записи",    callback_data="tttm_records"),
             types.InlineKeyboardButton(text="👥 Клієнти",   callback_data="tttm_clients"),
         ],
         [
@@ -100,6 +100,11 @@ _STATUS_FILTERS = {
     "cancelled": [ApptBookingStatus.CANCELLED_BY_CLIENT, ApptBookingStatus.CANCELLED_BY_MASTER,
                   ApptBookingStatus.NO_SHOW],
 }
+_TAB_NAMES = {
+    "pending":   "⏳ Очікують",
+    "upcoming":  "✅ Підтверджені",
+    "completed": "📁 Архів",
+}
 _STATUS_LABELS = {
     ApptBookingStatus.PENDING:             "⏳ Нова анкета",
     ApptBookingStatus.AWAITING_DEPOSIT:    "💳 Очікує депозит",
@@ -112,6 +117,28 @@ _STATUS_LABELS = {
 }
 
 
+def _tabs_row() -> list[types.InlineKeyboardButton]:
+    return [
+        types.InlineKeyboardButton(text="⏳ Очікують",    callback_data="tttm_list:pending"),
+        types.InlineKeyboardButton(text="✅ Підтверджені", callback_data="tttm_list:upcoming"),
+        types.InlineKeyboardButton(text="📁 Архів",        callback_data="tttm_list:completed"),
+    ]
+
+
+async def admin_records_home(callback: types.CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            "📋 <b>Записи</b>\n\nОберіть вкладку:",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                _tabs_row(),
+                [types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")],
+            ]),
+        )
+    except Exception:
+        pass
+
+
 async def admin_list(
     callback: types.CallbackQuery,
     session: AsyncSession,
@@ -119,6 +146,7 @@ async def admin_list(
 ) -> None:
     tab = callback.data.split(":")[1]
     statuses = _STATUS_FILTERS.get(tab, _STATUS_FILTERS["pending"])
+    tab_label = _TAB_NAMES.get(tab, tab)
 
     rows = (await session.execute(
         select(ApptBooking)
@@ -130,18 +158,12 @@ async def admin_list(
         .limit(20)
     )).scalars().all()
 
-    tabs_row = [
-        types.InlineKeyboardButton(text="⏳ Нові",       callback_data="tttm_list:pending"),
-        types.InlineKeyboardButton(text="✅ Майбутні",   callback_data="tttm_list:upcoming"),
-        types.InlineKeyboardButton(text="📁 Завершені",  callback_data="tttm_list:completed"),
-    ]
-
     if not rows:
         try:
             await callback.message.edit_text(
-                "Записів у розділі немає.",
+                f"📋 <b>{tab_label}</b>\n\nЗаписів немає.",
                 reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                    tabs_row,
+                    _tabs_row(),
                     [types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")],
                 ]),
             )
@@ -161,17 +183,17 @@ async def admin_list(
         )]
         for b in rows
     ]
-    bk_rows.append(tabs_row)
+    bk_rows.append(_tabs_row())
     bk_rows.append([types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")])
 
     try:
         await callback.message.edit_text(
-            f"📋 <b>Записи ({tab}):</b>",
+            f"📋 <b>{tab_label}:</b>",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=bk_rows),
         )
     except Exception:
         await callback.message.answer(
-            f"📋 <b>Записи ({tab}):</b>",
+            f"📋 <b>{tab_label}:</b>",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=bk_rows),
         )
     await callback.answer()
@@ -241,7 +263,7 @@ async def booking_view(
         kb_rows.append([
             types.InlineKeyboardButton(
                 text="❌ Відхилити",
-                callback_data=f"tttm_bk:{booking_id}:reject",
+                callback_data=f"tttm_bk:{booking_id}:cancel_pre",
             ),
         ])
     if booking.status == ApptBookingStatus.CONFIRMED:
@@ -255,18 +277,17 @@ async def booking_view(
                 callback_data=f"tttm_bk:{booking_id}:noshow",
             ),
         ])
-        if deposit and deposit.status == ApptDepositStatus.CONFIRMED:
-            kb_rows.append([
-                types.InlineKeyboardButton(
-                    text="❌ Скасувати (повернути депозит)",
-                    callback_data=f"tttm_bk:{booking_id}:cancel_return",
-                ),
-            ])
+        kb_rows.append([
+            types.InlineKeyboardButton(
+                text="❌ Скасувати",
+                callback_data=f"tttm_bk:{booking_id}:cancel_pre",
+            ),
+        ])
     if booking.status == ApptBookingStatus.PENDING:
         kb_rows.append([
             types.InlineKeyboardButton(
                 text="❌ Відхилити",
-                callback_data=f"tttm_bk:{booking_id}:reject",
+                callback_data=f"tttm_bk:{booking_id}:cancel_pre",
             ),
         ])
 
@@ -381,6 +402,12 @@ async def booking_action(
         if booking.status != ApptBookingStatus.CONFIRMED:
             await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
             return
+        if booking.slot_date > datetime.now(_TZ).date():
+            await callback.answer(
+                "Сеанс ще не відбувся. Цю дію можна виконати в день сеансу або пізніше.",
+                show_alert=True,
+            )
+            return
         booking.status = ApptBookingStatus.COMPLETED
         await session.commit()
         await callback.answer("✔️ Сеанс завершено!")
@@ -418,6 +445,12 @@ async def booking_action(
         if booking.status != ApptBookingStatus.CONFIRMED:
             await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
             return
+        if booking.slot_date >= datetime.now(_TZ).date():
+            await callback.answer(
+                "No-show можна позначити тільки після дати сеансу.",
+                show_alert=True,
+            )
+            return
         booking.status = ApptBookingStatus.NO_SHOW
         if deposit:
             deposit.status = ApptDepositStatus.KEPT
@@ -438,6 +471,7 @@ async def booking_action(
             pass
 
     elif action == "cancel_return":
+        # Legacy action kept for old inline messages still in master's chat
         if booking.status not in (
             ApptBookingStatus.CONFIRMED,
             ApptBookingStatus.AWAITING_DEPOSIT,
@@ -450,23 +484,88 @@ async def booking_action(
             deposit.status = ApptDepositStatus.RETURNED
         await session.commit()
         await callback.answer("↩️ Скасовано, депозит повертається.")
-
         if client_tid:
+            day_ua = _DAYS_SHORT[booking.slot_date.weekday()]
             try:
                 await bot.send_message(
                     chat_id=client_tid,
                     text=(
-                        f"😔 Майстер скасував ваш запис.\n\n"
-                        f"📅 {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
-                        f"Депозит буде повернуто. Вибачте за незручності. /start"
+                        f"На жаль, майстер скасував ваш запис.\n\n"
+                        f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
+                        "Якщо був сплачений депозит — він буде повернуто."
                     ),
                 )
             except Exception as e:
                 logger.warning("Could not notify client about cancellation: %s", e)
-
         try:
             await callback.message.edit_text(
-                f"Запис #{booking_id} скасовано. Депозит повертається клієнту.",
+                f"Запис #{booking_id} скасовано.",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="◀️ Записи", callback_data="tttm_list:pending")],
+                ]),
+            )
+        except Exception:
+            pass
+
+    elif action == "cancel_pre":
+        mention = (
+            f"@{client.username}" if client and client.username
+            else (client.full_name or f"ID {client.telegram_id}") if client
+            else f"#{booking_id}"
+        )
+        day_ua = _DAYS_SHORT[booking.slot_date.weekday()]
+        await callback.answer()
+        try:
+            await callback.message.edit_text(
+                f"⚠️ <b>Скасувати запис?</b>\n\n"
+                f"👤 {mention}\n"
+                f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        types.InlineKeyboardButton(
+                            text="✅ Так, скасувати",
+                            callback_data=f"tttm_bk:{booking_id}:cancel_yes",
+                        ),
+                        types.InlineKeyboardButton(
+                            text="❌ Ні",
+                            callback_data=f"tttm_bk:{booking_id}:view",
+                        ),
+                    ],
+                ]),
+            )
+        except Exception:
+            pass
+
+    elif action == "cancel_yes":
+        if booking.status not in (
+            ApptBookingStatus.PENDING,
+            ApptBookingStatus.AWAITING_DEPOSIT,
+            ApptBookingStatus.CONFIRMED,
+        ):
+            await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
+            return
+        booking.status = ApptBookingStatus.CANCELLED_BY_MASTER
+        booking.cancel_reason = "Скасовано майстром"
+        if deposit:
+            deposit.status = ApptDepositStatus.RETURNED
+        await session.commit()
+        await callback.answer("↩️ Запис скасовано.")
+        if client_tid:
+            day_ua = _DAYS_SHORT[booking.slot_date.weekday()]
+            try:
+                await bot.send_message(
+                    chat_id=client_tid,
+                    text=(
+                        f"На жаль, майстер скасував ваш запис.\n\n"
+                        f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
+                        "Якщо був сплачений депозит — він буде повернуто."
+                    ),
+                )
+            except Exception as e:
+                logger.warning("Could not notify client about cancellation: %s", e)
+        try:
+            await callback.message.edit_text(
+                f"Запис #{booking_id} скасовано.",
                 reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="◀️ Записи", callback_data="tttm_list:pending")],
                 ]),
@@ -1841,6 +1940,7 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(help_handler, F.data.startswith("tttm_help:"))
 
     # Booking list + single booking
+    dp.callback_query.register(admin_records_home, F.data == "tttm_records")
     dp.callback_query.register(admin_list,    F.data.startswith("tttm_list:"))
     dp.callback_query.register(booking_view,  F.data.func(lambda d: d.startswith("tttm_bk:") and d.endswith(":view")))
     dp.callback_query.register(booking_action, F.data.func(
