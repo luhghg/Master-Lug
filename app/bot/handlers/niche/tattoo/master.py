@@ -11,7 +11,7 @@ _TZ = ZoneInfo("Europe/Kyiv")
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment import (
@@ -117,12 +117,120 @@ _STATUS_LABELS = {
 }
 
 
+_ARCHIVE_PAGE_SIZE = 20
+_ARCHIVE_FILTER_LABELS = {
+    "all":    "Всі",
+    "done":   "✅ Завершені",
+    "cancel": "❌ Скасовані",
+    "noshow": "👻 No-show",
+}
+_ARCHIVE_FILTER_STATUSES: dict[str, list] = {
+    "all":    [
+        ApptBookingStatus.COMPLETED,
+        ApptBookingStatus.CANCELLED_BY_CLIENT,
+        ApptBookingStatus.CANCELLED_BY_MASTER,
+        ApptBookingStatus.NO_SHOW,
+    ],
+    "done":   [ApptBookingStatus.COMPLETED],
+    "cancel": [ApptBookingStatus.CANCELLED_BY_CLIENT, ApptBookingStatus.CANCELLED_BY_MASTER],
+    "noshow": [ApptBookingStatus.NO_SHOW],
+}
+
+
 def _tabs_row() -> list[types.InlineKeyboardButton]:
     return [
         types.InlineKeyboardButton(text="⏳ Очікують",    callback_data="tttm_list:pending"),
         types.InlineKeyboardButton(text="✅ Підтверджені", callback_data="tttm_list:upcoming"),
-        types.InlineKeyboardButton(text="📁 Архів",        callback_data="tttm_list:completed"),
+        types.InlineKeyboardButton(text="📁 Архів",        callback_data="tttm_archive:all:0"),
     ]
+
+
+async def admin_archive(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    parts = callback.data.split(":")  # tttm_archive:{filter}:{page}
+    flt  = parts[1] if len(parts) > 1 and parts[1] in _ARCHIVE_FILTER_STATUSES else "all"
+    page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+
+    statuses = _ARCHIVE_FILTER_STATUSES[flt]
+
+    total: int = (await session.execute(
+        select(func.count()).select_from(ApptBooking).where(
+            ApptBooking.bot_id == registered_bot_id,
+            ApptBooking.status.in_(statuses),
+        )
+    )).scalar() or 0
+
+    total_pages = max(1, (total + _ARCHIVE_PAGE_SIZE - 1) // _ARCHIVE_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+
+    rows = (await session.execute(
+        select(ApptBooking)
+        .where(
+            ApptBooking.bot_id == registered_bot_id,
+            ApptBooking.status.in_(statuses),
+        )
+        .order_by(ApptBooking.slot_date.desc(), ApptBooking.slot_time.desc())
+        .offset(page * _ARCHIVE_PAGE_SIZE)
+        .limit(_ARCHIVE_PAGE_SIZE)
+    )).scalars().all()
+
+    # Filter buttons (2 per row)
+    filter_btns = [
+        types.InlineKeyboardButton(
+            text=f"• {lbl}" if key == flt else lbl,
+            callback_data=f"tttm_archive:{key}:0",
+        )
+        for key, lbl in _ARCHIVE_FILTER_LABELS.items()
+    ]
+    filter_rows = [filter_btns[:2], filter_btns[2:]]
+
+    kb: list[list] = list(filter_rows)
+
+    if not rows:
+        kb.append(_tabs_row())
+        kb.append([types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")])
+        text = "📁 <b>Архів</b>\n\nЗаписів немає."
+    else:
+        for b in rows:
+            kb.append([types.InlineKeyboardButton(
+                text=(
+                    f"{_STATUS_LABELS.get(b.status, '?')} | "
+                    f"{b.slot_date.strftime('%d.%m')} {b.slot_time} | "
+                    f"#{b.id}"
+                ),
+                callback_data=f"tttm_bk:{b.id}:view",
+            )])
+
+        # Pagination row
+        pagination: list[types.InlineKeyboardButton] = []
+        if page > 0:
+            pagination.append(types.InlineKeyboardButton(
+                text="⬅️ Назад", callback_data=f"tttm_archive:{flt}:{page - 1}"
+            ))
+        pagination.append(types.InlineKeyboardButton(
+            text=f"Стор. {page + 1} з {total_pages}", callback_data="tttm_noop"
+        ))
+        if page < total_pages - 1:
+            pagination.append(types.InlineKeyboardButton(
+                text="Далі ➡️", callback_data=f"tttm_archive:{flt}:{page + 1}"
+            ))
+        kb.append(pagination)
+        kb.append(_tabs_row())
+        kb.append([types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")])
+        text = f"📁 <b>Архів</b> — {_ARCHIVE_FILTER_LABELS[flt]}:"
+
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb)
+        )
+    except Exception:
+        await callback.message.answer(
+            text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb)
+        )
 
 
 async def admin_records_home(callback: types.CallbackQuery) -> None:
@@ -145,6 +253,10 @@ async def admin_list(
     registered_bot_id: int,
 ) -> None:
     tab = callback.data.split(":")[1]
+    if tab == "completed":
+        callback.data = "tttm_archive:all:0"
+        await admin_archive(callback, session, registered_bot_id)
+        return
     statuses = _STATUS_FILTERS.get(tab, _STATUS_FILTERS["pending"])
     tab_label = _TAB_NAMES.get(tab, tab)
 
@@ -1918,6 +2030,10 @@ async def admin_home(
     await callback.answer()
 
 
+async def noop(callback: types.CallbackQuery) -> None:
+    await callback.answer()
+
+
 async def master_catchall_text(
     message: types.Message,
     owner_telegram_id: int,
@@ -1941,6 +2057,8 @@ def register(dp: Dispatcher) -> None:
 
     # Booking list + single booking
     dp.callback_query.register(admin_records_home, F.data == "tttm_records")
+    dp.callback_query.register(admin_archive, F.data.startswith("tttm_archive:"))
+    dp.callback_query.register(noop,          F.data == "tttm_noop")
     dp.callback_query.register(admin_list,    F.data.startswith("tttm_list:"))
     dp.callback_query.register(booking_view,  F.data.func(lambda d: d.startswith("tttm_bk:") and d.endswith(":view")))
     dp.callback_query.register(booking_action, F.data.func(
