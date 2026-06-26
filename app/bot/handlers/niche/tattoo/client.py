@@ -19,6 +19,7 @@ from app.models.appointment import (
     ApptClient, ApptDeposit, ApptDepositStatus, ApptReminder, ApptSchedule,
     ApptScheduleOverride, ReminderStatus, ReminderType,
 )
+from app.models.bot import RegisteredBot
 from app.models.tattoo import TattooPortfolio, TattooReview, ReviewStatus, TattooService
 from app.services.config_service import get_cfg, set_cfg, is_demo_bot
 
@@ -1045,6 +1046,23 @@ async def booking_confirm(
             show_alert=True,
         )
         return
+
+    # Block new bookings during grace period (subscription expired)
+    bot_record = await session.get(RegisteredBot, registered_bot_id)
+    if bot_record and bot_record.subscription_expires_at:
+        expires = bot_record.subscription_expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= expires:
+            await state.clear()
+            await _safe_edit(
+                callback.message,
+                "😔 <b>Майстер тимчасово не приймає нові записи.</b>\n\n"
+                "Зверніться до майстра напряму.",
+                reply_markup=_home_kb(),
+            )
+            return
+
     d = date.fromisoformat(data["slot_date"])
     day_ua = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"][d.weekday()]
     deposit_enabled = await _get_deposit_enabled(session, registered_bot_id)

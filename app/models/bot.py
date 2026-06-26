@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -58,3 +58,19 @@ class RegisteredBot(Base):
 
     def __repr__(self) -> str:
         return f"<RegisteredBot @{self.bot_username} niche={self.niche}>"
+
+
+class SubscriptionReminder(Base):
+    """Tracks subscription-expiry warnings sent to bot owners."""
+    __tablename__ = "subscription_reminders"
+    __table_args__ = (
+        UniqueConstraint("bot_id", "days_before", name="uq_sub_reminder"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # 7, 3, 1 = days before expiry; 0/-1/-2 = grace period day index
+    days_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
