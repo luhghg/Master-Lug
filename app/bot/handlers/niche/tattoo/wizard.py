@@ -135,6 +135,12 @@ def _styles_kb(selected: list[str]) -> types.InlineKeyboardMarkup:
                 text=f"{mark} {opt}", callback_data=f"tttw_style_tog:{opt}"
             ))
         rows.append(row)
+    # Custom styles (not in standard list) — show each with delete button
+    for cs in [s for s in selected if s not in _STYLE_OPTIONS]:
+        rows.append([
+            types.InlineKeyboardButton(text=f"✅ {cs}", callback_data=f"tttw_style_tog:{cs}"),
+            types.InlineKeyboardButton(text="🗑", callback_data=f"tttw_style_del:{cs}"),
+        ])
     rows.append([types.InlineKeyboardButton(
         text="➕ Свій стиль текстом", callback_data="tttw_style_custom"
     )])
@@ -227,7 +233,7 @@ def _quest_kb(state_dict: dict) -> types.InlineKeyboardMarkup:
             text=f"{mark} {label}", callback_data=f"tttw_quest_tog:{key}"
         )])
     rows.append([types.InlineKeyboardButton(text="✅ Зберегти і далі", callback_data="tttw_quest_done")])
-    rows.append([_back_btn(6), _interrupt_btn()])
+    rows.append([_back_btn(5), _interrupt_btn()])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -240,7 +246,7 @@ def _reminders_kb(state_dict: dict) -> types.InlineKeyboardMarkup:
             text=f"{mark} {label}", callback_data=f"tttw_rem_tog:{key}"
         )])
     rows.append([types.InlineKeyboardButton(text="✅ Зберегти і далі", callback_data="tttw_rem_done")])
-    rows.append([_back_btn(7), _interrupt_btn()])
+    rows.append([_back_btn(6), _interrupt_btn()])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -265,25 +271,47 @@ async def start_wizard(
     session: AsyncSession,
     bot_id: int,
 ) -> None:
-    data = await state.get_data()
-    if data.get("wizard_interrupted"):
+    step_str = await get_cfg(session, bot_id, _WIZARD_STEP_KEY)
+    if step_str and step_str.isdigit():
+        step = int(step_str)
         await message.answer(
-            "🔧 <b>Ви раніше перервали налаштування.</b>\n\nПродовжити з місця зупинки або почати знову?",
+            f"🔧 <b>Ви не завершили налаштування.</b>\n\n"
+            f"Зупинились на кроці <b>{step} з 9</b>.\n\n"
+            "Продовжити з того місця чи почати заново?",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="▶️ Продовжити", callback_data="tttw_resume")],
-                [types.InlineKeyboardButton(text="🔄 Почати знову", callback_data="tttw_restart")],
+                [types.InlineKeyboardButton(
+                    text=f"▶️ Продовжити з кроку {step}",
+                    callback_data="tttw_resume",
+                )],
+                [types.InlineKeyboardButton(text="🔄 Почати заново", callback_data="tttw_restart")],
             ]),
         )
         return
     await _step1_start(message, state)
 
 
+def _city_kb() -> types.InlineKeyboardMarkup:
+    rows = [[types.InlineKeyboardButton(text=c, callback_data=f"tttw_city:{c}")] for c in _COMMON_CITIES]
+    rows.append([
+        types.InlineKeyboardButton(text="◀️ Назад", callback_data="tttw_p_back_bio"),
+        _interrupt_btn(),
+    ])
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _step1_start(message: types.Message, state: FSMContext) -> None:
     await state.set_state(TattooWizardFSM.w_name)
     await message.answer(
-        _step_header(1, "👤 <b>Профіль майстра</b>\n\nВведіть ваше ім'я або назву студії (до 64 символів):"),
+        _step_header(1, "👤 <b>Профіль майстра (1/3)</b>\n\nВведіть ваше ім'я або назву студії (до 64 символів):"),
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[_interrupt_btn()]]),
     )
+
+
+def _bio_kb() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⏭ Пропустити", callback_data="tttw_bio_skip")],
+        [types.InlineKeyboardButton(text="◀️ Назад", callback_data="tttw_p_back_name"), _interrupt_btn()],
+    ])
 
 
 # ── Step 1: Profile ────────────────────────────────────────────────────────────
@@ -302,9 +330,52 @@ async def w_name_input(
     await state.update_data(w_name=text)
     await state.set_state(TattooWizardFSM.w_bio)
     await message.answer(
-        _step_header(1, "👤 <b>Профіль майстра</b>\n\nРозкажіть про себе клієнтам (до 300 символів):"),
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[_interrupt_btn()]]),
+        _step_header(1, "👤 <b>Профіль майстра (2/3)</b>\n\nРозкажіть про себе клієнтам — стиль, досвід, підхід (до 300 символів).\nМожна пропустити і заповнити пізніше в налаштуваннях."),
+        reply_markup=_bio_kb(),
     )
+
+
+async def w_bio_skip(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await state.update_data(w_bio=None)
+    await state.set_state(TattooWizardFSM.w_city)
+    await callback.answer()
+    await callback.message.edit_text(
+        _step_header(1, "👤 <b>Профіль майстра (3/3)</b>\n\nМісто роботи (оберіть або введіть текстом):"),
+        reply_markup=_city_kb(),
+    )
+
+
+async def w_p_back_name(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TattooWizardFSM.w_name)
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            _step_header(1, "👤 <b>Профіль майстра (1/3)</b>\n\nВведіть ваше ім'я або назву студії (до 64 символів):"),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[_interrupt_btn()]]),
+        )
+    except Exception:
+        await callback.message.answer(
+            _step_header(1, "👤 <b>Профіль майстра (1/3)</b>\n\nВведіть ваше ім'я або назву студії (до 64 символів):"),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[_interrupt_btn()]]),
+        )
+
+
+async def w_p_back_bio(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TattooWizardFSM.w_bio)
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            _step_header(1, "👤 <b>Профіль майстра (2/3)</b>\n\nРозкажіть про себе клієнтам — стиль, досвід, підхід (до 300 символів).\nМожна пропустити і заповнити пізніше в налаштуваннях."),
+            reply_markup=_bio_kb(),
+        )
+    except Exception:
+        await callback.message.answer(
+            _step_header(1, "👤 <b>Профіль майстра (2/3)</b>\n\nРозкажіть про себе клієнтам — стиль, досвід, підхід (до 300 символів).\nМожна пропустити і заповнити пізніше в налаштуваннях."),
+            reply_markup=_bio_kb(),
+        )
 
 
 async def w_bio_input(
@@ -320,11 +391,9 @@ async def w_bio_input(
     await set_cfg(session, registered_bot_id, TTT_MASTER_BIO, text)
     await state.update_data(w_bio=text)
     await state.set_state(TattooWizardFSM.w_city)
-    city_rows = [[types.InlineKeyboardButton(text=c, callback_data=f"tttw_city:{c}")] for c in _COMMON_CITIES]
-    city_rows.append([_interrupt_btn()])
     await message.answer(
-        _step_header(1, "👤 <b>Профіль майстра</b>\n\nМісто роботи (оберіть або введіть текстом):"),
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=city_rows),
+        _step_header(1, "👤 <b>Профіль майстра (3/3)</b>\n\nМісто роботи (оберіть або введіть текстом):"),
+        reply_markup=_city_kb(),
     )
 
 
@@ -338,8 +407,10 @@ async def w_city_btn(
     if city == "Інше":
         await callback.answer()
         await callback.message.edit_text(
-            _step_header(1, "👤 <b>Профіль майстра</b>\n\nВведіть своє місто:"),
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[_interrupt_btn()]]),
+            _step_header(1, "👤 <b>Профіль майстра (3/3)</b>\n\nВведіть своє місто:"),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="◀️ Назад", callback_data="tttw_p_back_bio"), _interrupt_btn()],
+            ]),
         )
         return
     await _save_city_and_goto_step2(callback.message, state, session, registered_bot_id, city)
@@ -427,6 +498,9 @@ async def w_style_custom_input(
     if not custom:
         await message.answer("Введіть назву стилю:")
         return
+    if len(custom) > 30:
+        await message.answer("⚠️ Назва стилю занадто довга (максимум 30 символів). Введіть коротше:")
+        return
     selected = list(data.get("w_styles", []))
     if custom not in selected:
         selected.append(custom)
@@ -435,6 +509,21 @@ async def w_style_custom_input(
         _step_header(2, "🎨 <b>Стилі татуювання</b>\n\nОберіть стилі в яких ви працюєте:"),
         reply_markup=_styles_kb(selected),
     )
+
+
+async def w_style_del(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    style = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected = [s for s in data.get("w_styles", []) if s != style]
+    await state.update_data(w_styles=selected)
+    await callback.answer(f"Видалено: {style}")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=_styles_kb(selected))
+    except Exception:
+        pass
 
 
 async def w_styles_done(
@@ -518,12 +607,15 @@ async def w_svc_name_input(message: types.Message, state: FSMContext) -> None:
 
 
 async def w_svc_price_input(message: types.Message, state: FSMContext) -> None:
+    import re as _re
     price = message.text.strip() if message.text else ""
     if not price:
         await message.answer("Введіть ціну:")
         return
-    if len(price) > 50:
-        await message.answer("⚠️ Ціна занадто довга (максимум 50 символів). Введіть коротше:")
+    if not _re.match(r"^\d{1,6}(-\d{1,6})?$", price):
+        await message.answer(
+            "⚠️ Введіть число або діапазон, наприклад: <code>500</code> або <code>500-2000</code>"
+        )
         return
     await state.update_data(w_svc_tmp_price=price)
     await state.set_state(TattooWizardFSM.w_svc_desc)
@@ -970,8 +1062,10 @@ async def w_deposit_amount_input(
 ) -> None:
     try:
         amount = int(message.text.strip())
+        if not (1 <= amount <= 99999):
+            raise ValueError
     except (ValueError, AttributeError):
-        await message.answer("Введіть тільки число (наприклад: 500):")
+        await message.answer("⚠️ Введіть суму числом від 1 до 99999, наприклад: <code>500</code>")
         return
     await set_cfg(session, registered_bot_id, TTT_DEPOSIT_AMOUNT, str(amount))
     await state.update_data(w_deposit_amount=amount)
@@ -988,10 +1082,15 @@ async def w_deposit_card_input(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
-    card = message.text.strip() if message.text else ""
-    if not card:
-        await message.answer("Введіть номер картки:")
+    raw = message.text.strip() if message.text else ""
+    digits = raw.replace(" ", "").replace("-", "")
+    if not digits.isdigit() or len(digits) != 16:
+        await message.answer(
+            "⚠️ Введіть 16 цифр номера картки без букв і знаків, наприклад:\n"
+            "<code>4149 6090 1234 5678</code>"
+        )
         return
+    card = f"{digits[:4]} {digits[4:8]} {digits[8:12]} {digits[12:]}"
     await set_cfg(session, registered_bot_id, TTT_CARD_NUMBER, card)
     await state.update_data(w_deposit_card=card)
     await state.set_state(TattooWizardFSM.w_deposit_purpose)
@@ -1010,6 +1109,9 @@ async def w_deposit_purpose_input(
     purpose = message.text.strip() if message.text else ""
     if not purpose:
         await message.answer("Введіть призначення платежу:")
+        return
+    if len(purpose) > 50:
+        await message.answer("⚠️ Призначення занадто довге (максимум 50 символів). Скоротіть:")
         return
     await set_cfg(session, registered_bot_id, TTT_DEPOSIT_PURPOSE, purpose)
     await set_cfg(session, registered_bot_id, TTT_DEPOSIT_ENABLED, "true")
@@ -1140,27 +1242,23 @@ async def w_msg_done(
 async def w_msg_edit_start(
     callback: types.CallbackQuery,
     state: FSMContext,
+    session: AsyncSession,
+    registered_bot_id: int,
 ) -> None:
     key = callback.data.split(":", 1)[1]
     label = next((lbl for k, lbl in _MSG_LABELS if k == key), key)
-    current = _TMPL.get(key, "")
+    current = await get_cfg(session, registered_bot_id, key) or _TMPL.get(key, "")
     await state.update_data(w_editing_msg_key=key)
     await state.set_state(TattooWizardFSM.w_msg_edit)
     await callback.answer()
+    cancel_kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="◀️ Скасувати", callback_data="tttw_msg_cancel_edit")],
+    ])
+    text = f"✏️ <b>{label}</b>\n\nПоточний текст:\n<code>{current}</code>\n\nВведіть новий текст:"
     try:
-        await callback.message.edit_text(
-            f"✏️ <b>{label}</b>\n\nПоточний текст:\n<code>{current}</code>\n\nВведіть новий текст:",
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="◀️ Скасувати", callback_data="tttw_msg_cancel_edit")],
-            ]),
-        )
+        await callback.message.edit_text(text, reply_markup=cancel_kb)
     except Exception:
-        await callback.message.answer(
-            f"✏️ <b>{label}</b>\n\nПоточний текст:\n<code>{current}</code>\n\nВведіть новий текст:",
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="◀️ Скасувати", callback_data="tttw_msg_cancel_edit")],
-            ]),
-        )
+        await callback.message.answer(text, reply_markup=cancel_kb)
 
 
 async def w_msg_edit_input(
@@ -1232,21 +1330,54 @@ async def _wizard_complete(
     await message.answer(data_summary, reply_markup=kb)
 
 
+_WIZARD_STEP_KEY = "ttt_wizard_step"  # persists in bot_config across FSM TTL
+
+_STATE_STEP_MAP = {
+    "w_name": 1, "w_bio": 1, "w_city": 1,
+    "w_styles": 2,
+    "w_services": 3, "w_svc_name": 3, "w_svc_price": 3, "w_svc_desc": 3,
+    "w_sched_mode_pick": 4, "w_sched_days": 4, "w_sched_start": 4,
+    "w_sched_end": 4, "w_sched_duration": 4, "w_sched_buffer": 4,
+    "w_sched_buf_custom": 4, "w_sched_dur_custom": 4,
+    "w_deposit": 5, "w_deposit_amount": 5, "w_deposit_card": 5, "w_deposit_purpose": 5,
+    "w_questionnaire": 6,
+    "w_reminders": 7,
+    "w_messages": 8, "w_msg_edit": 8,
+}
+
+
+def _current_step_from_state(fsm_state: str | None) -> int:
+    if not fsm_state:
+        return 1
+    key = fsm_state.split(":")[-1]
+    return _STATE_STEP_MAP.get(key, 1)
+
+
 # ── Interrupt / Resume / Restart ───────────────────────────────────────────────
 
-async def w_interrupt(callback: types.CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(wizard_interrupted=True)
+async def w_interrupt(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
     current_state = await state.get_state()
+    step = _current_step_from_state(current_state)
+    await set_cfg(session, registered_bot_id, _WIZARD_STEP_KEY, str(step))
     await state.update_data(wizard_last_state=current_state)
     await state.set_state(None)
     await callback.answer()
     try:
         await callback.message.edit_text(
-            "⏸ Налаштування збережено. Продовжте пізніше через /start",
+            f"⏸ Налаштування призупинено на кроці <b>{step} з 9</b>.\n\n"
+            "Введені дані збережено. Продовжте пізніше через /start",
             reply_markup=None,
         )
     except Exception:
-        await callback.message.answer("⏸ Налаштування збережено. Продовжте пізніше через /start")
+        await callback.message.answer(
+            f"⏸ Налаштування призупинено на кроці <b>{step} з 9</b>.\n\n"
+            "Введені дані збережено. Продовжте пізніше через /start",
+        )
 
 
 async def w_resume(
@@ -1255,42 +1386,9 @@ async def w_resume(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
-    data = await state.get_data()
-    last_state = data.get("wizard_last_state")
-    await state.update_data(wizard_interrupted=False)
+    step_str = await get_cfg(session, registered_bot_id, _WIZARD_STEP_KEY)
+    step = int(step_str) if step_str and step_str.isdigit() else 1
     await callback.answer()
-
-    state_to_step = {
-        TattooWizardFSM.w_name: 1,
-        TattooWizardFSM.w_bio: 1,
-        TattooWizardFSM.w_city: 1,
-        TattooWizardFSM.w_styles: 2,
-        TattooWizardFSM.w_services: 3,
-        TattooWizardFSM.w_svc_name: 3,
-        TattooWizardFSM.w_svc_price: 3,
-        TattooWizardFSM.w_svc_desc: 3,
-        TattooWizardFSM.w_sched_mode_pick: 4,
-        TattooWizardFSM.w_sched_days: 4,
-        TattooWizardFSM.w_sched_start: 4,
-        TattooWizardFSM.w_sched_end: 4,
-        TattooWizardFSM.w_sched_duration: 4,
-        TattooWizardFSM.w_sched_buffer: 4,
-        TattooWizardFSM.w_deposit: 5,
-        TattooWizardFSM.w_deposit_amount: 5,
-        TattooWizardFSM.w_deposit_card: 5,
-        TattooWizardFSM.w_deposit_purpose: 5,
-        TattooWizardFSM.w_questionnaire: 6,
-        TattooWizardFSM.w_reminders: 7,
-        TattooWizardFSM.w_messages: 8,
-        TattooWizardFSM.w_msg_edit: 8,
-    }
-
-    step = 1
-    for fsm_state, s in state_to_step.items():
-        if last_state and last_state.endswith(str(fsm_state).split(":")[-1]):
-            step = s
-            break
-
     await _goto_step_number(callback.message, state, session, registered_bot_id, step, edit=True)
 
 
@@ -1300,6 +1398,7 @@ async def w_restart(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
+    await set_cfg(session, registered_bot_id, _WIZARD_STEP_KEY, "")
     await state.clear()
     await callback.answer()
     await _step1_start(callback.message, state)
@@ -1456,11 +1555,15 @@ def register(dp: Dispatcher) -> None:
     # Step 1 — profile
     dp.message.register(w_name_input,  TattooWizardFSM.w_name,  F.text)
     dp.message.register(w_bio_input,   TattooWizardFSM.w_bio,   F.text)
+    dp.callback_query.register(w_bio_skip,    F.data == "tttw_bio_skip")
+    dp.callback_query.register(w_p_back_name, F.data == "tttw_p_back_name")
+    dp.callback_query.register(w_p_back_bio,  F.data == "tttw_p_back_bio")
     dp.callback_query.register(w_city_btn, TattooWizardFSM.w_city, F.data.startswith("tttw_city:"))
     dp.message.register(w_city_input,  TattooWizardFSM.w_city,  F.text)
 
     # Step 2 — styles
     dp.callback_query.register(w_style_toggle,       F.data.startswith("tttw_style_tog:"))
+    dp.callback_query.register(w_style_del,          F.data.startswith("tttw_style_del:"))
     dp.callback_query.register(w_style_custom,       F.data == "tttw_style_custom")
     dp.callback_query.register(w_styles_done,        F.data == "tttw_styles_done")
     dp.message.register(w_style_custom_input, TattooWizardFSM.w_styles, F.text)
