@@ -1,4 +1,5 @@
 """Master/admin handlers for the TATTOO niche — booking management, schedule, clients."""
+import json
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.appointment import (
     ApptBlockedDate, ApptBooking, ApptBookingStatus,
-    ApptClient, ApptDeposit, ApptDepositStatus, ApptSchedule,
+    ApptClient, ApptDeposit, ApptDepositStatus, ApptSchedule, ApptScheduleOverride,
 )
 from app.models.tattoo import TattooPortfolio, TattooReview, ReviewStatus, TattooService
 from app.services.config_service import get_cfg, get_json
@@ -54,9 +55,10 @@ class TattooMasterFSM(StatesGroup):
     block_date_start = State()
     block_date_end   = State()
     block_reason     = State()
-    deposit_card     = State()
-    deposit_amount   = State()
-    welcome_text     = State()
+    deposit_card       = State()
+    deposit_amount     = State()
+    welcome_text       = State()
+    sched_ovr_slot_input = State()
 
 
 # ── Admin menu ────────────────────────────────────────────────────────────────
@@ -633,6 +635,23 @@ async def client_note_text(
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
 
+def _generate_slots_m(sched: ApptSchedule) -> list[str]:
+    """Generate HH:MM slot list from an ApptSchedule (same logic as client side)."""
+    try:
+        sh, sm = map(int, sched.start_time.split(":"))
+        eh, em = map(int, sched.end_time.split(":"))
+    except Exception:
+        return []
+    step = (sched.slot_duration_min or 60) + (sched.buffer_min or 0)
+    start_min = sh * 60 + sm
+    end_min   = eh * 60 + em
+    slots: list[str] = []
+    cur = start_min
+    while cur + (sched.slot_duration_min or 60) <= end_min:
+        slots.append(f"{cur // 60:02d}:{cur % 60:02d}")
+        cur += step
+    return slots
+
 async def schedule_view(
     callback: types.CallbackQuery,
     session: AsyncSession,
@@ -661,17 +680,24 @@ async def schedule_view(
         )]
         for i in range(7)
     ]
+    ovr_btn = [types.InlineKeyboardButton(text="📅 Слоти на конкретну дату", callback_data="tttm_sched_ovr")]
     rows.append([types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")])
 
     try:
         await callback.message.edit_text(
             text,
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[rows[0] + rows[1] + rows[2], rows[3] + rows[4], rows[5] + rows[6], rows[7]]),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                rows[0] + rows[1] + rows[2],
+                rows[3] + rows[4],
+                rows[5] + rows[6],
+                ovr_btn,
+                rows[7],
+            ]),
         )
     except Exception:
-        # Fallback simpler layout
         flat = [r[0] for r in rows[:-1]]
         combined = [flat[i:i+3] for i in range(0, len(flat), 3)]
+        combined.append(ovr_btn)
         combined.append(rows[-1])
         await callback.message.edit_text(
             text,
@@ -783,6 +809,256 @@ async def schedule_off(
     await callback.answer(f"🔴 {_DAYS_UA[dow]} — вихідний")
     callback.data = "tttm_schedule"
     await schedule_view(callback, session, registered_bot_id)
+
+
+# ── Schedule overrides ────────────────────────────────────────────────────────
+
+async def _sched_ovr_get(
+    session: AsyncSession, bot_id: int, d: date
+) -> tuple[list[str], set[str], bool]:
+    """Return (all_slots, booked_slots, has_override) for the given date."""
+    override = (await session.execute(
+        select(ApptScheduleOverride).where(
+            ApptScheduleOverride.bot_id == bot_id,
+            ApptScheduleOverride.date == d,
+        )
+    )).scalar_one_or_none()
+
+    if override is not None:
+        all_slots = json.loads(override.slots_json)
+        has_override = True
+    else:
+        sched_row = (await session.execute(
+            select(ApptSchedule).where(
+                ApptSchedule.bot_id == bot_id,
+                ApptSchedule.day_of_week == d.weekday(),
+                ApptSchedule.is_active.is_(True),
+            )
+        )).scalar_one_or_none()
+        all_slots = _generate_slots_m(sched_row) if sched_row else []
+        has_override = False
+
+    booked_rows = (await session.execute(
+        select(ApptBooking.slot_time).where(
+            ApptBooking.bot_id == bot_id,
+            ApptBooking.slot_date == d,
+            ApptBooking.status.in_([
+                ApptBookingStatus.PENDING,
+                ApptBookingStatus.AWAITING_DEPOSIT,
+                ApptBookingStatus.CONFIRMED,
+            ]),
+        )
+    )).scalars().all()
+
+    return all_slots, set(booked_rows), has_override
+
+
+async def _sched_ovr_save(
+    session: AsyncSession, bot_id: int, d: date, slots: list[str]
+) -> None:
+    existing = (await session.execute(
+        select(ApptScheduleOverride).where(
+            ApptScheduleOverride.bot_id == bot_id,
+            ApptScheduleOverride.date == d,
+        )
+    )).scalar_one_or_none()
+    payload = json.dumps(sorted(slots))
+    if existing:
+        existing.slots_json = payload
+    else:
+        session.add(ApptScheduleOverride(bot_id=bot_id, date=d, slots_json=payload))
+    await session.commit()
+
+
+async def sched_ovr_view(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    today = datetime.now(_TZ).date()
+    window_end = today + timedelta(days=14)
+    override_dates = set((await session.execute(
+        select(ApptScheduleOverride.date).where(
+            ApptScheduleOverride.bot_id == registered_bot_id,
+            ApptScheduleOverride.date > today,
+            ApptScheduleOverride.date <= window_end,
+        )
+    )).scalars().all())
+
+    pair: list[types.InlineKeyboardButton] = []
+    rows: list[list[types.InlineKeyboardButton]] = []
+    for offset in range(1, 15):
+        d = today + timedelta(days=offset)
+        lbl = f"{_DAYS_SHORT[d.weekday()]} {d.strftime('%d.%m')}"
+        if d in override_dates:
+            lbl = f"✏️ {lbl}"
+        pair.append(types.InlineKeyboardButton(
+            text=lbl, callback_data=f"tttm_ovr_day:{d.isoformat()}",
+        ))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([types.InlineKeyboardButton(text="◀️ Розклад", callback_data="tttm_schedule")])
+
+    await callback.answer()
+    await callback.message.edit_text(
+        "📅 <b>Слоти на конкретну дату</b>\n\n"
+        "Оберіть дату для редагування слотів.\n"
+        "<i>✏️ — є власне налаштування для дати.</i>",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+async def sched_ovr_day_view(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    date_str = callback.data.split(":", 1)[1]
+    d = date.fromisoformat(date_str)
+    all_slots, booked_slots, has_override = await _sched_ovr_get(session, registered_bot_id, d)
+
+    label = d.strftime("%d.%m.%Y")
+    day_name = _DAYS_UA[d.weekday()]
+    source = "⚙️ власне налаштування" if has_override else "📋 з тижневого розкладу"
+
+    if not all_slots:
+        slots_text = "<i>Немає слотів (вихідний або розклад не налаштовано).</i>"
+    else:
+        lines = [
+            f"🔒 {s} — заброньовано" if s in booked_slots else f"✅ {s}"
+            for s in all_slots
+        ]
+        slots_text = "\n".join(lines)
+
+    rows: list[list[types.InlineKeyboardButton]] = []
+    for s in all_slots:
+        if s not in booked_slots:
+            rows.append([types.InlineKeyboardButton(
+                text=f"🗑 Видалити {s}",
+                callback_data=f"tttm_ovr_del:{date_str}:{s}",
+            )])
+    rows.append([types.InlineKeyboardButton(
+        text="➕ Додати слот", callback_data=f"tttm_ovr_add:{date_str}",
+    )])
+    if has_override:
+        rows.append([types.InlineKeyboardButton(
+            text="🔄 Скинути до розкладу", callback_data=f"tttm_ovr_reset:{date_str}",
+        )])
+    rows.append([types.InlineKeyboardButton(text="◀️ Назад", callback_data="tttm_sched_ovr")])
+
+    await callback.answer()
+    await callback.message.edit_text(
+        f"📅 <b>{day_name}, {label}</b>\n"
+        f"<i>Джерело: {source}</i>\n\n"
+        f"{slots_text}",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+async def sched_ovr_del(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    parts = callback.data.split(":", 2)
+    date_str, slot = parts[1], parts[2]
+    d = date.fromisoformat(date_str)
+    all_slots, booked_slots, _ = await _sched_ovr_get(session, registered_bot_id, d)
+
+    if slot in booked_slots:
+        await callback.answer("⛔ Цей слот вже заброньований.", show_alert=True)
+        return
+
+    new_slots = [s for s in all_slots if s != slot]
+    await _sched_ovr_save(session, registered_bot_id, d, new_slots)
+    callback.data = f"tttm_ovr_day:{date_str}"
+    await sched_ovr_day_view(callback, session, registered_bot_id)
+
+
+async def sched_ovr_add(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+) -> None:
+    date_str = callback.data.split(":", 1)[1]
+    await state.update_data(sched_ovr_date=date_str)
+    await state.set_state(TattooMasterFSM.sched_ovr_slot_input)
+    await callback.answer()
+    await callback.message.edit_text(
+        "⏰ Введіть час слоту у форматі <b>HH:MM</b> (наприклад: 15:30):",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text="❌ Скасувати", callback_data=f"tttm_ovr_day:{date_str}",
+            ),
+        ]]),
+    )
+
+
+async def sched_ovr_slot_text(
+    message: types.Message,
+    state: FSMContext,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    text = (message.text or "").strip()
+    if not re.match(r"^\d{1,2}:\d{2}$", text):
+        await message.answer("⚠️ Невірний формат. Введіть час у форматі HH:MM (наприклад: 15:30):")
+        return
+    h, m = map(int, text.split(":"))
+    if h > 23 or m > 59:
+        await message.answer("⚠️ Час поза межами 00:00–23:59. Спробуйте ще раз:")
+        return
+
+    slot = f"{h:02d}:{m:02d}"
+    data = await state.get_data()
+    date_str = data.get("sched_ovr_date")
+    if not date_str:
+        await state.clear()
+        await message.answer("⚠️ Сесія закінчилась. Почніть знову через розклад.")
+        return
+
+    d = date.fromisoformat(date_str)
+    all_slots, _, _ = await _sched_ovr_get(session, registered_bot_id, d)
+
+    if slot in all_slots:
+        await message.answer(f"⚠️ Слот {slot} вже є для цієї дати. Введіть інший час:")
+        return
+
+    await _sched_ovr_save(session, registered_bot_id, d, all_slots + [slot])
+    await state.clear()
+
+    label = d.strftime("%d.%m.%Y")
+    await message.answer(
+        f"✅ Слот <b>{slot}</b> додано на {label}.",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text=f"📅 {label}", callback_data=f"tttm_ovr_day:{date_str}",
+            ),
+            types.InlineKeyboardButton(text="◀️ Розклад", callback_data="tttm_schedule"),
+        ]]),
+    )
+
+
+async def sched_ovr_reset(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    date_str = callback.data.split(":", 1)[1]
+    d = date.fromisoformat(date_str)
+    override = (await session.execute(
+        select(ApptScheduleOverride).where(
+            ApptScheduleOverride.bot_id == registered_bot_id,
+            ApptScheduleOverride.date == d,
+        )
+    )).scalar_one_or_none()
+    if override:
+        await session.delete(override)
+        await session.commit()
+    callback.data = f"tttm_ovr_day:{date_str}"
+    await sched_ovr_day_view(callback, session, registered_bot_id)
 
 
 # ── Blocked dates ─────────────────────────────────────────────────────────────
@@ -1324,6 +1600,14 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(schedule_day,  F.data.startswith("tttm_sched_day:"))
     dp.callback_query.register(schedule_set,  F.data.startswith("tttm_sched_set:"))
     dp.callback_query.register(schedule_off,  F.data.startswith("tttm_sched_off:"))
+
+    # Schedule overrides (per-date slot management)
+    dp.callback_query.register(sched_ovr_view,     F.data == "tttm_sched_ovr")
+    dp.callback_query.register(sched_ovr_day_view, F.data.startswith("tttm_ovr_day:"))
+    dp.callback_query.register(sched_ovr_del,      F.data.startswith("tttm_ovr_del:"))
+    dp.callback_query.register(sched_ovr_add,      F.data.startswith("tttm_ovr_add:"))
+    dp.callback_query.register(sched_ovr_reset,    F.data.startswith("tttm_ovr_reset:"))
+    dp.message.register(sched_ovr_slot_text, TattooMasterFSM.sched_ovr_slot_input, F.text)
 
     # Blocked dates
     dp.callback_query.register(blocked_view,       F.data == "tttm_blocked")

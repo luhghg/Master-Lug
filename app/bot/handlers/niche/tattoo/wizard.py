@@ -197,7 +197,7 @@ def _buffer_kb() -> types.InlineKeyboardMarkup:
     quick = [("0 хв", 0), ("15 хв", 15), ("30 хв", 30), ("45 хв", 45), ("60 хв", 60)]
     rows = [
         [types.InlineKeyboardButton(text=lbl, callback_data=f"tttw_sched_buf:{m}") for lbl, m in quick[:3]],
-        [types.InlineKeyboardButton(text=lbl, callback_data=f"tttw_sched_buf:{m}") for lbl, m in quick[2:]],
+        [types.InlineKeyboardButton(text=lbl, callback_data=f"tttw_sched_buf:{m}") for lbl, m in quick[3:]],
         [types.InlineKeyboardButton(text="✏️ Вказати своє (хвилини)", callback_data="tttw_sched_buf_custom")],
         [_sched_sub_back_btn("dur"), _interrupt_btn()],
     ]

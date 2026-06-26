@@ -158,6 +158,26 @@ class ApptSchedule(Base):
     )
 
 
+class ApptScheduleOverride(Base):
+    """Per-date slot override — replaces generated schedule for a specific date.
+
+    slots_json: JSON array of "HH:MM" strings, e.g. '["10:00","13:00","16:00"]'.
+    When this row exists the slot generation is skipped entirely for that date.
+    """
+    __tablename__ = "appt_schedule_overrides"
+    __table_args__ = (
+        UniqueConstraint("bot_id", "date", name="uq_appt_schedule_override"),
+        Index("ix_appt_sched_ovr_bot", "bot_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("registered_bots.id", ondelete="CASCADE"), nullable=False
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    slots_json: Mapped[str] = mapped_column(Text, nullable=False)  # '["10:00","12:00"]'
+
+
 class ApptBlockedDate(Base):
     """Vacation or public holidays — entire date range blocked for bookings."""
     __tablename__ = "appt_blocked_dates"

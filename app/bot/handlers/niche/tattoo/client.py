@@ -1,5 +1,6 @@
 """Client-facing handlers for the TATTOO niche (v2 full booking lifecycle)."""
 import calendar
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.appointment import (
     ApptBlockedDate, ApptBooking, ApptBookingStatus,
     ApptClient, ApptDeposit, ApptDepositStatus, ApptReminder, ApptSchedule,
-    ReminderStatus, ReminderType,
+    ApptScheduleOverride, ReminderStatus, ReminderType,
 )
 from app.models.tattoo import TattooPortfolio, TattooReview, ReviewStatus, TattooService
 from app.services.config_service import get_cfg, is_demo_bot
@@ -177,10 +178,25 @@ async def _available_dates(
         )
     )).scalars().all()
 
-    if not schedules:
+    today = datetime.now(_TZ).date()
+
+    # Load per-date overrides for the lookahead window
+    window_end = today + timedelta(days=lookahead_days)
+    overrides = (await session.execute(
+        select(ApptScheduleOverride).where(
+            ApptScheduleOverride.bot_id == bot_id,
+            ApptScheduleOverride.date > today,
+            ApptScheduleOverride.date <= window_end,
+        )
+    )).scalars().all()
+    override_map: dict[date, list[str]] = {
+        o.date: json.loads(o.slots_json) for o in overrides
+    }
+
+    if not schedules and not override_map:
         # No schedule configured — return next 30 weekdays as fallback
         result = set()
-        d = datetime.now(_TZ).date() + timedelta(days=1)
+        d = today + timedelta(days=1)
         while len(result) < 30:
             if d.weekday() < 5:  # Mon-Fri
                 result.add(d)
@@ -199,7 +215,6 @@ async def _available_dates(
                 return True
         return False
 
-    # Get booked slots (AWAITING_DEPOSIT + CONFIRMED)
     booked_rows = (await session.execute(
         select(ApptBooking.slot_date, ApptBooking.slot_time).where(
             ApptBooking.bot_id == bot_id,
@@ -212,18 +227,19 @@ async def _available_dates(
     )).all()
     booked = {(r.slot_date, r.slot_time) for r in booked_rows}
 
-    today = datetime.now(_TZ).date()
     available: set[date] = set()
 
     for offset in range(1, lookahead_days + 1):
         d = today + timedelta(days=offset)
-        dow = d.weekday()
-        if dow not in schedule_map:
-            continue
         if _is_blocked(d):
             continue
-        sched = schedule_map[dow]
-        slots = _generate_slots(sched)
+        if d in override_map:
+            slots = override_map[d]
+        else:
+            dow = d.weekday()
+            if dow not in schedule_map:
+                continue
+            slots = _generate_slots(schedule_map[dow])
         free = [s for s in slots if (d, s) not in booked]
         if free:
             available.add(d)
@@ -252,19 +268,29 @@ def _generate_slots(sched: ApptSchedule) -> list[str]:
 async def _slots_for_date(
     session: AsyncSession, bot_id: int, d: date
 ) -> list[str]:
-    sched_row = (await session.execute(
-        select(ApptSchedule).where(
-            ApptSchedule.bot_id == bot_id,
-            ApptSchedule.day_of_week == d.weekday(),
-            ApptSchedule.is_active.is_(True),
+    # Per-date override takes precedence over weekly schedule
+    override = (await session.execute(
+        select(ApptScheduleOverride).where(
+            ApptScheduleOverride.bot_id == bot_id,
+            ApptScheduleOverride.date == d,
         )
     )).scalar_one_or_none()
 
-    if sched_row is None:
-        # Default fallback slots if no schedule
-        return ["10:00", "12:00", "14:00", "16:00", "18:00"]
+    if override is not None:
+        all_slots = json.loads(override.slots_json)
+    else:
+        sched_row = (await session.execute(
+            select(ApptSchedule).where(
+                ApptSchedule.bot_id == bot_id,
+                ApptSchedule.day_of_week == d.weekday(),
+                ApptSchedule.is_active.is_(True),
+            )
+        )).scalar_one_or_none()
 
-    all_slots = _generate_slots(sched_row)
+        if sched_row is None:
+            return ["10:00", "12:00", "14:00", "16:00", "18:00"]
+
+        all_slots = _generate_slots(sched_row)
 
     booked_rows = (await session.execute(
         select(ApptBooking.slot_time).where(
