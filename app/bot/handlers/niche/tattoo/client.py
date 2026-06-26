@@ -171,17 +171,11 @@ async def _available_dates(
     session: AsyncSession, bot_id: int, lookahead_days: int = 60
 ) -> set[date]:
     """Return set of dates that have at least one free slot."""
-    schedules = (await session.execute(
-        select(ApptSchedule).where(
-            ApptSchedule.bot_id == bot_id,
-            ApptSchedule.is_active.is_(True),
-        )
-    )).scalars().all()
-
+    mode = await get_cfg(session, bot_id, "ttt_schedule_mode")
     today = datetime.now(_TZ).date()
-
-    # Load per-date overrides for the lookahead window
     window_end = today + timedelta(days=lookahead_days)
+
+    # Load per-date overrides (used in both modes)
     overrides = (await session.execute(
         select(ApptScheduleOverride).where(
             ApptScheduleOverride.bot_id == bot_id,
@@ -193,27 +187,12 @@ async def _available_dates(
         o.date: json.loads(o.slots_json) for o in overrides
     }
 
-    if not schedules and not override_map:
-        # No schedule configured — return next 30 weekdays as fallback
-        result = set()
-        d = today + timedelta(days=1)
-        while len(result) < 30:
-            if d.weekday() < 5:  # Mon-Fri
-                result.add(d)
-            d += timedelta(days=1)
-        return result
-
-    schedule_map = {s.day_of_week: s for s in schedules}
-
     blocked = (await session.execute(
         select(ApptBlockedDate).where(ApptBlockedDate.bot_id == bot_id)
     )).scalars().all()
 
     def _is_blocked(d: date) -> bool:
-        for b in blocked:
-            if b.date_start <= d <= b.date_end:
-                return True
-        return False
+        return any(b.date_start <= d <= b.date_end for b in blocked)
 
     booked_rows = (await session.execute(
         select(ApptBooking.slot_date, ApptBooking.slot_time).where(
@@ -227,7 +206,38 @@ async def _available_dates(
     )).all()
     booked = {(r.slot_date, r.slot_time) for r in booked_rows}
 
-    available: set[date] = set()
+    if mode == "flexible":
+        # Only manually-added override slots are visible to clients
+        available: set[date] = set()
+        for o in overrides:
+            d = o.date
+            if _is_blocked(d):
+                continue
+            free = [s for s in json.loads(o.slots_json) if (d, s) not in booked]
+            if free:
+                available.add(d)
+        return available
+
+    # ── Fixed mode ──────────────────────────────────────────────────────────────
+    schedules = (await session.execute(
+        select(ApptSchedule).where(
+            ApptSchedule.bot_id == bot_id,
+            ApptSchedule.is_active.is_(True),
+        )
+    )).scalars().all()
+
+    if not schedules and not override_map:
+        # No schedule configured — return next 30 weekdays as fallback
+        result: set[date] = set()
+        d = today + timedelta(days=1)
+        while len(result) < 30:
+            if d.weekday() < 5:
+                result.add(d)
+            d += timedelta(days=1)
+        return result
+
+    schedule_map = {s.day_of_week: s for s in schedules}
+    available = set()
 
     for offset in range(1, lookahead_days + 1):
         d = today + timedelta(days=offset)
@@ -268,7 +278,9 @@ def _generate_slots(sched: ApptSchedule) -> list[str]:
 async def _slots_for_date(
     session: AsyncSession, bot_id: int, d: date
 ) -> list[str]:
-    # Per-date override takes precedence over weekly schedule
+    mode = await get_cfg(session, bot_id, "ttt_schedule_mode")
+
+    # Per-date override always wins (both modes)
     override = (await session.execute(
         select(ApptScheduleOverride).where(
             ApptScheduleOverride.bot_id == bot_id,
@@ -278,6 +290,8 @@ async def _slots_for_date(
 
     if override is not None:
         all_slots = json.loads(override.slots_json)
+    elif mode == "flexible":
+        return []  # flexible mode: no override = no slots
     else:
         sched_row = (await session.execute(
             select(ApptSchedule).where(
@@ -833,6 +847,19 @@ async def _ask_date(
     bot_id: int,
 ) -> None:
     available = await _available_dates(session, bot_id)
+
+    if not available:
+        mode = await get_cfg(session, bot_id, "ttt_schedule_mode")
+        if mode == "flexible":
+            await _safe_edit(
+                message,
+                "😔 <b>Зараз немає доступних дат для запису.</b>\n\n"
+                "Майстер ще не додав вільний час. Спробуйте пізніше або "
+                "зв'яжіться з майстром напряму.",
+                reply_markup=_home_kb(),
+            )
+            return
+
     today = datetime.now(_TZ).date()
     year, month = today.year, today.month
     cal = _make_ttt_calendar(year, month, available)

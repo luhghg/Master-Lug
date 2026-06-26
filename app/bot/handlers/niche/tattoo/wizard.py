@@ -37,6 +37,7 @@ TTT_MIN_AGE_ENABLED  = "ttt_min_age_enabled"
 TTT_MIN_AGE_TEXT     = "ttt_min_age_text"
 TTT_CANCEL_HOURS     = "ttt_cancel_hours"
 TTT_MASTER_SOCIAL    = "ttt_social"
+TTT_SCHEDULE_MODE    = "ttt_schedule_mode"   # "fixed" | "flexible"
 
 _TMPL = {
     TTT_MSG_WELCOME: "👋 <b>Ласкаво просимо!</b>\n\nОберіть що вас цікавить:",
@@ -92,6 +93,7 @@ class TattooWizardFSM(StatesGroup):
     w_svc_name         = State()
     w_svc_price        = State()
     w_svc_desc         = State()
+    w_sched_mode_pick  = State()   # Fixed vs Flexible
     w_sched_days       = State()
     w_sched_start      = State()   # text: HH:MM
     w_sched_end        = State()   # text: HH:MM
@@ -154,7 +156,7 @@ def _days_kb(selected: list[int]) -> types.InlineKeyboardMarkup:
         row1[:4],
         row1[4:],
         [types.InlineKeyboardButton(text="✅ Підтвердити дні", callback_data="tttw_days_done")],
-        [_back_btn(3), _interrupt_btn()],
+        [types.InlineKeyboardButton(text="◀️ Назад", callback_data="tttw_sched_mode"), _interrupt_btn()],
     ])
 
 
@@ -579,8 +581,8 @@ async def w_svc_done(
         ))
     if svc_list:
         await session.commit()
-    await state.set_state(TattooWizardFSM.w_sched_days)
-    await _show_sched_days(callback.message, state, edit=True)
+    await state.set_state(TattooWizardFSM.w_sched_mode_pick)
+    await _show_sched_mode(callback.message, state, edit=True)
     await callback.answer()
 
 
@@ -591,6 +593,83 @@ async def w_svc_back(callback: types.CallbackQuery, state: FSMContext) -> None:
 
 
 # ── Step 4: Schedule ───────────────────────────────────────────────────────────
+
+def _sched_mode_kb() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(
+            text="📅 Фіксований графік",
+            callback_data="tttw_sched_mode_fixed",
+        )],
+        [types.InlineKeyboardButton(
+            text="🔄 Гнучкий графік",
+            callback_data="tttw_sched_mode_flex",
+        )],
+        [_back_btn(3), _interrupt_btn()],
+    ])
+
+
+async def _show_sched_mode(
+    message: types.Message,
+    state: FSMContext,
+    edit: bool = False,
+) -> None:
+    text = _step_header(
+        4,
+        "🗓 <b>Як у вас влаштований графік роботи?</b>\n\n"
+        "<b>📅 Фіксований графік</b> — працюю за розкладом (конкретні дні і "
+        "години, система автоматично генерує доступні слоти для клієнтів).\n\n"
+        "<b>🔄 Гнучкий графік</b> — без фіксованого розкладу, сам додаватиму "
+        "вільний час вручну через панель майстра.",
+    )
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=_sched_mode_kb())
+            return
+        except Exception:
+            pass
+    await message.answer(text, reply_markup=_sched_mode_kb())
+
+
+async def w_sched_mode(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TattooWizardFSM.w_sched_mode_pick)
+    await _show_sched_mode(callback.message, state, edit=True)
+    await callback.answer()
+
+
+async def w_sched_mode_fixed(callback: types.CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(TattooWizardFSM.w_sched_days)
+    await _show_sched_days(callback.message, state, edit=True)
+    await callback.answer()
+
+
+async def w_sched_mode_flexible(
+    callback: types.CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    await set_cfg(session, registered_bot_id, TTT_SCHEDULE_MODE, "flexible")
+    await state.set_state(TattooWizardFSM.w_deposit)
+    await callback.answer()
+    try:
+        await callback.message.edit_text(
+            "✅ <b>Зрозуміло!</b>\n\n"
+            "Ви зможете додавати вільний час вручну через:\n"
+            "<b>Панель майстра → 📅 Розклад → Додати слот</b>\n\n"
+            "Клієнти бачитимуть тільки ті слоти, які ви самі додасте.",
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+    await callback.message.answer(
+        _step_header(5, "💳 <b>Депозит</b>\n\nЧи хочете отримувати депозит для підтвердження запису?"),
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="✅ Увімкнути депозит", callback_data="tttw_dep_yes")],
+            [types.InlineKeyboardButton(text="⏩ Пропустити (без депозиту)", callback_data="tttw_dep_no")],
+            [_back_btn(4), _interrupt_btn()],
+        ]),
+    )
+
 
 async def _show_sched_days(
     message: types.Message,
@@ -1185,6 +1264,7 @@ async def w_resume(
         TattooWizardFSM.w_svc_name: 3,
         TattooWizardFSM.w_svc_price: 3,
         TattooWizardFSM.w_svc_desc: 3,
+        TattooWizardFSM.w_sched_mode_pick: 4,
         TattooWizardFSM.w_sched_days: 4,
         TattooWizardFSM.w_sched_start: 4,
         TattooWizardFSM.w_sched_end: 4,
@@ -1255,8 +1335,8 @@ async def _goto_step_number(
         await state.set_state(TattooWizardFSM.w_services)
         await _show_services_step(message, state, edit=edit)
     elif step == 4:
-        await state.set_state(TattooWizardFSM.w_sched_days)
-        await _show_sched_days(message, state, edit=edit)
+        await state.set_state(TattooWizardFSM.w_sched_mode_pick)
+        await _show_sched_mode(message, state, edit=edit)
     elif step == 5:
         await state.set_state(TattooWizardFSM.w_deposit)
         text = _step_header(5, "💳 <b>Депозит</b>\n\nЧи хочете отримувати депозит?")
@@ -1389,7 +1469,12 @@ def register(dp: Dispatcher) -> None:
     dp.message.register(w_svc_price_input, TattooWizardFSM.w_svc_price, F.text)
     dp.message.register(w_svc_desc_input,  TattooWizardFSM.w_svc_desc,  F.text)
 
-    # Step 4 — schedule
+    # Step 4 — schedule mode pick
+    dp.callback_query.register(w_sched_mode,         F.data == "tttw_sched_mode")
+    dp.callback_query.register(w_sched_mode_fixed,   F.data == "tttw_sched_mode_fixed")
+    dp.callback_query.register(w_sched_mode_flexible, F.data == "tttw_sched_mode_flex")
+
+    # Step 4 — fixed schedule sub-steps
     dp.callback_query.register(w_day_toggle, F.data.startswith("tttw_day_tog:"))
     dp.callback_query.register(w_days_done,  F.data == "tttw_days_done")
     # start/end: text input
