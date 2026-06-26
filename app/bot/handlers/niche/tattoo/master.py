@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, F, types
 
 _TZ = ZoneInfo("Europe/Kyiv")
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import and_, select
@@ -1821,17 +1821,14 @@ async def admin_home(
 
 async def master_catchall_text(
     message: types.Message,
-    state: FSMContext,
     owner_telegram_id: int,
 ) -> None:
     """Silently delete random text from the master when no FSM state is active."""
     if message.from_user and message.from_user.id == owner_telegram_id:
-        current = await state.get_state()
-        if current is None:
-            try:
-                await message.delete()
-            except Exception:
-                pass
+        try:
+            await message.delete()
+        except Exception:
+            pass
 
 
 # ── Handler registration ───────────────────────────────────────────────────────
@@ -1903,5 +1900,5 @@ def register(dp: Dispatcher) -> None:
     dp.message.register(portfolio_add_time,  TattooMasterFSM.portfolio_time,  F.text)
     dp.message.register(portfolio_add_price, TattooMasterFSM.portfolio_price, F.text)
 
-    # Catch-all: delete random text from master when no FSM active
-    dp.message.register(master_catchall_text, F.text)
+    # Catch-all: delete random text from master when no FSM active (StateFilter(None) = no active state)
+    dp.message.register(master_catchall_text, StateFilter(None), F.text)
