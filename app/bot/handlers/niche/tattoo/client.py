@@ -33,6 +33,8 @@ _CARD_NUMBER      = "ttt_card_number"
 _WELCOME_TEXT     = "ttt_welcome"
 _SOCIAL_TEXT      = "ttt_social"
 _DEPOSIT_MINUTES  = "ttt_deposit_minutes"  # minutes client has to pay before slot released
+_BOOKING_WINDOW   = "ttt_booking_window_days"
+_DEFAULT_WINDOW   = 60
 
 _DEFAULT_DEPOSIT   = 500
 _DEFAULT_CARD      = ""
@@ -624,9 +626,11 @@ async def _show_price(
         await _safe_edit(message, "💰 Майстер ще не додав послуги.", reply_markup=_home_kb())
         return
     lines = [f"• <b>{s.name}</b> — {s.price}" for s in services]
-    deposit = await _get_deposit(session, bot_id)
     text = "💰 <b>Прайс-лист:</b>\n\n" + "\n".join(lines)
-    text += f"\n\n💳 Депозит для запису: <b>{deposit} грн</b>"
+    enabled = await _get_deposit_enabled(session, bot_id)
+    if enabled:
+        deposit = await _get_deposit(session, bot_id)
+        text += f"\n\n💳 Депозит для запису: <b>{deposit} грн</b>"
     await _safe_edit(message, text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="📅 Записатись", callback_data="ttt_menu:booking")],
         [types.InlineKeyboardButton(text="🏠 Меню",       callback_data="ttt_menu:home")],
@@ -846,7 +850,8 @@ async def _ask_date(
     session: AsyncSession,
     bot_id: int,
 ) -> None:
-    available = await _available_dates(session, bot_id)
+    window = int(await get_cfg(session, bot_id, _BOOKING_WINDOW, str(_DEFAULT_WINDOW)))
+    available = await _available_dates(session, bot_id, window)
 
     if not available:
         mode = await get_cfg(session, bot_id, "ttt_schedule_mode")

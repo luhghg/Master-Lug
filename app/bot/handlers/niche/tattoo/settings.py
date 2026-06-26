@@ -14,7 +14,7 @@ from app.models.tattoo import TattooService
 from app.services.config_service import get_cfg, get_json, set_cfg, set_json
 from app.bot.handlers.niche.tattoo.wizard import (
     TTT_ONBOARDING_DONE, TTT_MASTER_NAME, TTT_MASTER_BIO, TTT_MASTER_CITY,
-    TTT_MASTER_SOCIAL, TTT_SCHEDULE_MODE,
+    TTT_MASTER_SOCIAL, TTT_SCHEDULE_MODE, TTT_BOOKING_WINDOW,
     TTT_STYLES, TTT_DEPOSIT_ENABLED, TTT_DEPOSIT_AMOUNT, TTT_CARD_NUMBER,
     TTT_DEPOSIT_PURPOSE, TTT_QUESTIONNAIRE, TTT_REMINDERS,
     TTT_MSG_WELCOME, TTT_MSG_CONFIRM, TTT_MSG_REMINDER_TPL, TTT_MSG_AFTERCARE,
@@ -206,6 +206,7 @@ async def settings_schedule(
                     text="🔄 Перейти на фіксований графік",
                     callback_data="ttts_sched_to_fixed",
                 )],
+                [types.InlineKeyboardButton(text="📅 Вікно запису", callback_data="ttts_sched_window")],
                 [_back_to_settings_btn()],
             ]),
         )
@@ -230,6 +231,7 @@ async def settings_schedule(
     text = "🗓 <b>Розклад</b>\n\n" + "\n".join(lines)
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="✏️ Змінити розклад",          callback_data="ttts_sched_edit")],
+        [types.InlineKeyboardButton(text="📅 Вікно запису",             callback_data="ttts_sched_window")],
         [types.InlineKeyboardButton(text="🚫 Відпустка / блокування",   callback_data="tttm_blocked")],
         [types.InlineKeyboardButton(text="🔄 Перейти на гнучкий графік", callback_data="ttts_sched_to_flex")],
         [_back_to_settings_btn()],
@@ -547,6 +549,41 @@ async def settings_sched_to_fixed(
     await callback.answer("✅ Режим змінено на фіксований", show_alert=False)
     callback.data = "ttts_schedule"
     await settings_schedule(callback, session, registered_bot_id)
+
+
+async def settings_sched_window(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    current = await get_cfg(session, registered_bot_id, TTT_BOOKING_WINDOW, "60")
+    rows = []
+    for days in (7, 14, 30, 60):
+        mark = "✅ " if str(days) == current else ""
+        rows.append([types.InlineKeyboardButton(
+            text=f"{mark}{days} днів",
+            callback_data=f"ttts_sched_win:{days}",
+        )])
+    rows.append([types.InlineKeyboardButton(text="◀️ Розклад", callback_data="ttts_schedule")])
+    await _safe_edit(
+        callback.message,
+        "📅 <b>Вікно запису</b>\n\nСкільки днів вперед клієнт може записатись:",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+async def settings_sched_window_set(
+    callback: types.CallbackQuery,
+    session: AsyncSession,
+    registered_bot_id: int,
+) -> None:
+    days = callback.data.split(":")[1]
+    await set_cfg(session, registered_bot_id, TTT_BOOKING_WINDOW, days)
+    await session.commit()
+    await callback.answer(f"✅ Збережено: {days} днів")
+    callback.data = "ttts_sched_window"
+    await settings_sched_window(callback, session, registered_bot_id)
 
 
 # ── Services ───────────────────────────────────────────────────────────────────
@@ -1295,6 +1332,9 @@ def register(dp: Dispatcher) -> None:
     dp.callback_query.register(settings_sched_to_flex,     F.data == "ttts_sched_to_flex")
     dp.callback_query.register(settings_sched_to_flex_yes, F.data == "ttts_sched_to_flex_yes")
     dp.callback_query.register(settings_sched_to_fixed,    F.data == "ttts_sched_to_fixed")
+    # Booking window
+    dp.callback_query.register(settings_sched_window,     F.data == "ttts_sched_window")
+    dp.callback_query.register(settings_sched_window_set, F.data.startswith("ttts_sched_win:"))
 
     # Services
     dp.callback_query.register(settings_services,      F.data == "ttts_services")

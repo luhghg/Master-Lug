@@ -480,6 +480,10 @@ async def booking_action(
         ):
             await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
             return
+        deposit_paid = (
+            deposit is not None and
+            deposit.status in (ApptDepositStatus.SCREENSHOT_SENT, ApptDepositStatus.CONFIRMED)
+        )
         booking.status = ApptBookingStatus.CANCELLED_BY_MASTER
         booking.cancel_reason = "Відхилено майстром"
         if deposit:
@@ -488,13 +492,14 @@ async def booking_action(
         await callback.answer("❌ Запис відхилено.")
 
         if client_tid:
+            dep_note = "\n\nДепозит буде повернуто." if deposit_paid else ""
             try:
                 await bot.send_message(
                     chat_id=client_tid,
                     text=(
                         f"😔 На жаль, майстер не може прийняти ваш запис.\n\n"
-                        f"📅 {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
-                        f"Депозит буде повернуто. Спробуйте обрати інший час /start"
+                        f"📅 {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}"
+                        f"{dep_note}\n\nСпробуйте обрати інший час /start"
                     ),
                 )
             except Exception as e:
@@ -590,21 +595,26 @@ async def booking_action(
         ):
             await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
             return
+        deposit_paid = (
+            deposit is not None and
+            deposit.status in (ApptDepositStatus.SCREENSHOT_SENT, ApptDepositStatus.CONFIRMED)
+        )
         booking.status = ApptBookingStatus.CANCELLED_BY_MASTER
         booking.cancel_reason = "Скасовано майстром з поверненням депозиту"
         if deposit:
             deposit.status = ApptDepositStatus.RETURNED
         await session.commit()
-        await callback.answer("↩️ Скасовано, депозит повертається.")
+        await callback.answer("↩️ Скасовано, депозит повертається." if deposit_paid else "↩️ Запис скасовано.")
         if client_tid:
             day_ua = _DAYS_SHORT[booking.slot_date.weekday()]
+            dep_note = "\n\nДепозит буде повернуто." if deposit_paid else ""
             try:
                 await bot.send_message(
                     chat_id=client_tid,
                     text=(
                         f"На жаль, майстер скасував ваш запис.\n\n"
-                        f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
-                        "Якщо був сплачений депозит — він буде повернуто."
+                        f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}"
+                        f"{dep_note}"
                     ),
                 )
             except Exception as e:
@@ -656,6 +666,10 @@ async def booking_action(
         ):
             await callback.answer("⚠️ Статус запису змінився — дія недоступна.", show_alert=True)
             return
+        deposit_paid = (
+            deposit is not None and
+            deposit.status in (ApptDepositStatus.SCREENSHOT_SENT, ApptDepositStatus.CONFIRMED)
+        )
         booking.status = ApptBookingStatus.CANCELLED_BY_MASTER
         booking.cancel_reason = "Скасовано майстром"
         if deposit:
@@ -664,13 +678,14 @@ async def booking_action(
         await callback.answer("↩️ Запис скасовано.")
         if client_tid:
             day_ua = _DAYS_SHORT[booking.slot_date.weekday()]
+            dep_note = "\n\nДепозит буде повернуто." if deposit_paid else ""
             try:
                 await bot.send_message(
                     chat_id=client_tid,
                     text=(
                         f"На жаль, майстер скасував ваш запис.\n\n"
-                        f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}\n\n"
-                        "Якщо був сплачений депозит — він буде повернуто."
+                        f"📅 {day_ua}, {booking.slot_date.strftime('%d.%m.%Y')} о {booking.slot_time}"
+                        f"{dep_note}"
                     ),
                 )
             except Exception as e:

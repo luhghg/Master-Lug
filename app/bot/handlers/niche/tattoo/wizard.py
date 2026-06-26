@@ -38,6 +38,7 @@ TTT_MIN_AGE_TEXT     = "ttt_min_age_text"
 TTT_CANCEL_HOURS     = "ttt_cancel_hours"
 TTT_MASTER_SOCIAL    = "ttt_social"
 TTT_SCHEDULE_MODE    = "ttt_schedule_mode"   # "fixed" | "flexible"
+TTT_BOOKING_WINDOW   = "ttt_booking_window_days"  # how many days ahead client can book
 
 _TMPL = {
     TTT_MSG_WELCOME: "👋 <b>Ласкаво просимо!</b>\n\nОберіть що вас цікавить:",
