@@ -1033,6 +1033,13 @@ async def booking_confirm(
         logger.exception("booking_confirm: _upsert_client failed bot=%s", registered_bot_id)
         await _safe_edit(callback.message, "⚠️ Помилка при оформленні запису. Спробуйте ще раз.", reply_markup=_home_kb())
         return
+    if client.is_blocked:
+        await state.clear()
+        await callback.answer(
+            "⛔ Ваш доступ до цього бота обмежено. Зверніться до майстра.",
+            show_alert=True,
+        )
+        return
     d = date.fromisoformat(data["slot_date"])
     day_ua = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"][d.weekday()]
     deposit_enabled = await _get_deposit_enabled(session, registered_bot_id)

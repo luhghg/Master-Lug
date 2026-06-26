@@ -154,6 +154,18 @@ async def _route(
                     "⏳ Майстер ще налаштовує бота. Спробуйте зайти трохи пізніше!"
                 )
                 return
+            from app.models.appointment import ApptClient
+            client_rec = (await session.execute(
+                select(ApptClient).where(
+                    ApptClient.bot_id == registered_bot_id,
+                    ApptClient.telegram_id == user_id,
+                )
+            )).scalar_one_or_none()
+            if client_rec and client_rec.is_blocked:
+                await message.answer(
+                    "⛔ На жаль, ваш доступ до цього бота обмежено. Зверніться до майстра."
+                )
+                return
             await ttt_show_client(message, session, registered_bot_id)
         return
 

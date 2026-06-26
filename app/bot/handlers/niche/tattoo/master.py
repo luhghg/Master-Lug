@@ -68,7 +68,7 @@ def _admin_markup() -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [
             types.InlineKeyboardButton(text="📋 Записи",    callback_data="tttm_records"),
-            types.InlineKeyboardButton(text="👥 Клієнти",   callback_data="tttm_clients"),
+            types.InlineKeyboardButton(text="👥 Клієнти",   callback_data="tttm_clients:all"),
         ],
         [
             types.InlineKeyboardButton(text="🗓 Розклад",   callback_data="tttm_schedule"),
@@ -693,37 +693,57 @@ async def clients_list(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
-    clients = (await session.execute(
-        select(ApptClient)
-        .where(ApptClient.bot_id == registered_bot_id)
-        .order_by(ApptClient.bookings_count.desc())
-        .limit(20)
-    )).scalars().all()
+    parts = callback.data.split(":")
+    flt = parts[1] if len(parts) > 1 and parts[1] in ("all", "blocked") else "all"
+
+    query = select(ApptClient).where(ApptClient.bot_id == registered_bot_id)
+    if flt == "blocked":
+        query = query.where(ApptClient.is_blocked.is_(True))
+    query = query.order_by(ApptClient.bookings_count.desc()).limit(50)
+    clients = (await session.execute(query)).scalars().all()
+
+    filter_row = [
+        types.InlineKeyboardButton(
+            text="• Всі" if flt == "all" else "Всі",
+            callback_data="tttm_clients:all",
+        ),
+        types.InlineKeyboardButton(
+            text="• 🚫 Заблоковані" if flt == "blocked" else "🚫 Заблоковані",
+            callback_data="tttm_clients:blocked",
+        ),
+    ]
 
     if not clients:
         await callback.message.edit_text(
-            "👥 Клієнтів поки немає.",
+            "👥 Клієнтів немає.",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                filter_row,
                 [types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")],
             ]),
         )
         await callback.answer()
         return
 
-    rows = [
-        [types.InlineKeyboardButton(
-            text=(
-                f"{'🚫 ' if c.is_blocked else ''}"
-                f"{c.full_name or c.username or str(c.telegram_id)} "
-                f"({c.bookings_count} зап.)"
-            ),
-            callback_data=f"tttm_client:{c.id}",
-        )]
-        for c in clients
-    ]
+    rows: list[list] = [filter_row]
+    for c in clients:
+        mention = c.full_name or c.username or str(c.telegram_id)
+        row = [
+            types.InlineKeyboardButton(
+                text=f"{'🚫 ' if c.is_blocked else ''}{mention} ({c.bookings_count} зап.)",
+                callback_data=f"tttm_client:{c.id}",
+            )
+        ]
+        if flt == "blocked":
+            row.append(types.InlineKeyboardButton(
+                text="✅ Розблокувати",
+                callback_data=f"tttm_client_action:{c.id}:unblock",
+            ))
+        rows.append(row)
     rows.append([types.InlineKeyboardButton(text="◀️ Меню", callback_data="tttm_admin:home")])
+
+    label = "🚫 Заблоковані" if flt == "blocked" else "всі"
     await callback.message.edit_text(
-        "👥 <b>Клієнти:</b>",
+        f"👥 <b>Клієнти ({label}):</b>",
         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
@@ -765,7 +785,7 @@ async def client_view(
                 types.InlineKeyboardButton(text="📝 Нотатка",  callback_data=f"tttm_client_action:{client_id}:note"),
                 block_btn,
             ],
-            [types.InlineKeyboardButton(text="◀️ Клієнти", callback_data="tttm_clients")],
+            [types.InlineKeyboardButton(text="◀️ Клієнти", callback_data="tttm_clients:all")],
         ]),
     )
     await callback.answer()
@@ -2066,7 +2086,7 @@ def register(dp: Dispatcher) -> None:
     ))
 
     # Clients
-    dp.callback_query.register(clients_list,    F.data == "tttm_clients")
+    dp.callback_query.register(clients_list,    F.data.startswith("tttm_clients"))
     dp.callback_query.register(client_view,     F.data.startswith("tttm_client:") & ~F.data.startswith("tttm_client_action:"))
     dp.callback_query.register(client_action,   F.data.startswith("tttm_client_action:") & ~F.data.endswith(":note_clear"))
     dp.callback_query.register(client_note_clear, F.data.func(lambda d: d.startswith("tttm_client_action:") and d.endswith(":note_clear")))
