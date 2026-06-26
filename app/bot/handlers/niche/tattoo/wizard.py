@@ -569,6 +569,7 @@ async def w_svc_done(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
+    await callback.answer()
     data = await state.get_data()
     svc_list = data.get("w_services_list", [])
     for i, svc in enumerate(svc_list):
@@ -583,7 +584,6 @@ async def w_svc_done(
         await session.commit()
     await state.set_state(TattooWizardFSM.w_sched_mode_pick)
     await _show_sched_mode(callback.message, state, edit=True)
-    await callback.answer()
 
 
 async def w_svc_back(callback: types.CallbackQuery, state: FSMContext) -> None:
@@ -854,10 +854,10 @@ async def w_sched_buffer(
     session: AsyncSession,
     registered_bot_id: int,
 ) -> None:
+    await callback.answer()
     buf = int(callback.data.split(":")[1])
     saved = await _do_save_schedule(state, session, registered_bot_id, buf)
     if not saved:
-        await callback.answer("⚠️ Список днів втрачено — оберіть дні знову.", show_alert=True)
         await state.set_state(TattooWizardFSM.w_sched_days)
         await _show_sched_days(callback.message, state, edit=True)
         return
@@ -880,7 +880,6 @@ async def w_sched_buffer(
                 [_back_btn(4), _interrupt_btn()],
             ]),
         )
-    await callback.answer()
 
 
 async def w_sched_buf_custom_btn(callback: types.CallbackQuery, state: FSMContext) -> None:
