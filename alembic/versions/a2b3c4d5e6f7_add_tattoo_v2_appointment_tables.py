@@ -35,11 +35,8 @@ _REMINDER_STATUS = sa.Enum(
 
 
 def upgrade() -> None:
-    # ALTER TYPE ADD VALUE must run outside a transaction in older PG versions
-    conn = op.get_bind()
-    conn.execution_options(isolation_level="AUTOCOMMIT").execute(
-        sa.text("ALTER TYPE botniche ADD VALUE IF NOT EXISTS 'TATTOO'")
-    )
+    # PG 9.1+ allows ALTER TYPE ADD VALUE inside a transaction; use op.execute directly
+    op.execute(sa.text("ALTER TYPE botniche ADD VALUE IF NOT EXISTS 'TATTOO'"))
 
     # appt_clients
     op.create_table(
