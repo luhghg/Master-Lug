@@ -255,12 +255,13 @@ async def booking_view(
                 callback_data=f"tttm_bk:{booking_id}:noshow",
             ),
         ])
-        kb_rows.append([
-            types.InlineKeyboardButton(
-                text="❌ Скасувати (повернути депозит)",
-                callback_data=f"tttm_bk:{booking_id}:cancel_return",
-            ),
-        ])
+        if deposit and deposit.status == ApptDepositStatus.CONFIRMED:
+            kb_rows.append([
+                types.InlineKeyboardButton(
+                    text="❌ Скасувати (повернути депозит)",
+                    callback_data=f"tttm_bk:{booking_id}:cancel_return",
+                ),
+            ])
     if booking.status == ApptBookingStatus.PENDING:
         kb_rows.append([
             types.InlineKeyboardButton(
