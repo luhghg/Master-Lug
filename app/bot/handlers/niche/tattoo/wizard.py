@@ -509,6 +509,9 @@ async def w_svc_name_input(message: types.Message, state: FSMContext) -> None:
     if not name:
         await message.answer("Введіть назву послуги:")
         return
+    if len(name) > 100:
+        await message.answer("⚠️ Назва занадто довга (максимум 100 символів). Скоротіть і надішліть ще раз:")
+        return
     await state.update_data(w_svc_tmp_name=name)
     await state.set_state(TattooWizardFSM.w_svc_price)
     await message.answer("Ціна послуги (грн, тільки число або діапазон «1000-3000»):")
@@ -518,6 +521,9 @@ async def w_svc_price_input(message: types.Message, state: FSMContext) -> None:
     price = message.text.strip() if message.text else ""
     if not price:
         await message.answer("Введіть ціну:")
+        return
+    if len(price) > 50:
+        await message.answer("⚠️ Ціна занадто довга (максимум 50 символів). Введіть коротше:")
         return
     await state.update_data(w_svc_tmp_price=price)
     await state.set_state(TattooWizardFSM.w_svc_desc)
