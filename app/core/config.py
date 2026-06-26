@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # --- Subscription / payments ---
     MONOBANK_CARD: str = ""          # Card number shown in payment reminders
     MONOBANK_API_TOKEN: str = ""     # From Monobank app → Settings → Other → API
-    SUBSCRIPTION_PRICE: int = 199    # Beauty bot UAH per month
+    SUBSCRIPTION_PRICE: int = 299    # Beauty bot UAH per month
     SUBSCRIPTION_PRICE_LABOR: int = 79  # Labor bot UAH per month
 
     # --- Demo bots (register them on the platform, then fill in) ---

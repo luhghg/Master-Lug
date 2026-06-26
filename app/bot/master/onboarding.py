@@ -86,7 +86,7 @@ def _welcome_text() -> str:
         "Платформа Telegram-ботів для малого бізнесу.\n\n"
         "⚡️ Готовий бот за 2 хвилини\n"
         "🔧 Без програмування\n"
-        "💰 199 грн/місяць за бот\n\n"
+        "💰 299 грн/місяць за бот\n\n"
         "Що вас цікавить?"
     )
 
@@ -259,13 +259,13 @@ async def land_pricing(callback: types.CallbackQuery) -> None:
         callback.message,
         "💰 <b>Ціни та умови</b>\n\n"
         "🎯 <b>Один план — все включено</b>\n\n"
-        "         <b>199 грн / місяць за бот</b>\n\n"
+        "         <b>299 грн / місяць за бот</b>\n\n"
         "✅ Необмежена кількість клієнтів\n"
         "✅ Всі функції платформи\n"
         "✅ Технічна підтримка\n"
         "✅ Оновлення безкоштовно\n\n"
         "📌 <b>Кожен бот — окрема підписка:</b>\n"
-        "  1 бот  →  199 грн/міс\n"
+        "  1 бот  →  299 грн/міс\n"
         "  2 боти →  398 грн/міс\n\n"
         f"📌 Beauty бот — <b>{settings.SUBSCRIPTION_PRICE} грн/міс</b>\n"
         f"📌 Labor бот — <b>{settings.SUBSCRIPTION_PRICE_LABOR} грн/міс</b>\n\n"
@@ -402,7 +402,7 @@ def _terms_text(niche: BotNiche) -> str:
         "• Платформа не читає переписку ваших користувачів\n"
         "• Токен зберігається у зашифрованому вигляді\n"
         "• Ви можете відключити бота у будь-який момент\n"
-        "• Сервіс надається на умовах підписки (199 грн/міс за бот)\n"
+        "• Сервіс надається на умовах підписки (299 грн/міс за бот)\n"
         "• В описі вашого бота буде автоматично вказано платформу\n\n"
         f"<i>Рекомендована назва: <code>{example}</code></i>"
     )
@@ -725,7 +725,7 @@ async def referral_info(callback: types.CallbackQuery, session: AsyncSession) ->
     bonus_days = purchases * 30
 
     ref_link = f"https://t.me/{app_state.master_bot_username}?start=ref_{user_id}"
-    share_url = f"https://t.me/share/url?url={ref_link}&text=Спробуй%20MasterLug%20%E2%80%94%20Telegram-боти%20для%20бізнесу%20від%20199%20грн%2Fміс"
+    share_url = f"https://t.me/share/url?url={ref_link}&text=Спробуй%20MasterLug%20%E2%80%94%20Telegram-боти%20для%20бізнесу%20від%20299%20грн%2Fміс"
 
     await _safe_edit(
         callback.message,
